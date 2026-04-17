@@ -6,12 +6,12 @@
         "mac": "2.2081",
         "ios": "2.2081"
     },
-    "id": "chillbotuwu",
+    "id": "Ivanogolik.chillbot",
     "name": "chillbot",
     "version": "v1.0.0",
     "developer": "Ivanogolik",
     "description": "Обучающийся ИИ бот для прохождения уровней. Сохраняет реплеи .gdr2",
-    "repository": "https://github.com/yourname/gd-ai-bot",
+    "repository": "https://github.com/Ivanogolik/chillbot",
     
     "dependencies": [
         {
