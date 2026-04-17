@@ -15,11 +15,6 @@
     
     "dependencies": [
         {
-            "id": "maxnut.gd-replay-format",
-            "version": ">=v1.1.0",
-            "importance": "required"
-        },
-        {
             "id": "geode.node-ids",
             "version": ">=v1.22.0",
             "importance": "suggested"
@@ -27,11 +22,6 @@
         {
             "id": "geode.custom-keybinds",
             "version": ">=v2.1.0",
-            "importance": "suggested"
-        },
-        {
-            "id": "hjfod.betteredit",
-            "version": ">=v4.0.0",
             "importance": "suggested"
         },
         {
