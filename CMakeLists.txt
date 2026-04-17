@@ -18,12 +18,13 @@ endif()
 add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 
 # GDReplayFormat для .gdr2
-include(cmake/CPM.cmake)
-CPMAddPackage(
-    NAME GDReplayFormat
-    GITHUB_REPOSITORY maxnut/GDReplayFormat
-    GIT_TAG 7c3c9d2
+include(FetchContent)
+FetchContent_Declare(
+    libGDR
+    GIT_REPOSITORY https://github.com/maxnut/GDReplayFormat.git
+    GIT_TAG gdr2
 )
+FetchContent_MakeAvailable(libGDR)
 
 target_link_libraries(${PROJECT_NAME} libGDR)
 
