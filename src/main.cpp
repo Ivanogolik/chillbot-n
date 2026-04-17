@@ -84,16 +84,16 @@ public:
     bool init() {
         net.load();
         enabled = Mod::get()->getSettingValue("ai-enabled");
-        currentReplay = gdr::Replay("GD AI Bot", 1);
+        currentReplay = gdr::Replay("chillbot", 1);
         currentReplay.framerate = 240.0;
-        currentReplay.botInfo = {"gd-ai-bot", "1.0.0"};
+        currentReplay.botInfo = {"chillbot", "1.0.0"};
         
         // DevTools интеграция
         #ifdef GEODE_DEVTOOLS
         if (Loader::get()->isModLoaded("geode.devtools")) {
             devtools::waitForDevTools([]{
                 devtools::registerNode([](AIBot* bot){
-                    devtools::label("GD AI Bot");
+                    devtools::label("chillbot");
                     devtools::checkbox("Enabled", &bot->enabled);
                     devtools::property("Best %", bot->bestPercent);
                     devtools::property("Deaths", bot->deaths);
@@ -262,7 +262,7 @@ $execute {
         "Включить ИИ бота",
         "Запуск/остановка обучения",
         { Keybind::create(KEY_F5) },
-        "GD AI Bot/Управление"
+        "chillbot/Управление"
     });
 
     new EventListener([](InvokeBindEvent* e){
