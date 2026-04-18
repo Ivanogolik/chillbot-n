@@ -1,6 +1,7 @@
 // ============================================================
-// chillbot v1.0.10-FINAL by Ivanogolik
+// chillbot v1.0.11-FINAL by Ivanogolik
 // AI bot for Geometry Dash 2.2081 / Geode 5.6.1
+// Verified against bindings 2.2081 + Geode SDK 5.6.1 docs
 // ============================================================
 
 #ifdef _WIN32
@@ -14,18 +15,18 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
-#include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include <Geode/loader/Loader.hpp>
 #include <Geode/loader/Mod.hpp>
-#include <Geode/utils/file.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
 #include <Geode/binding/GJGameLevel.hpp>
+#include <Geode/binding/GameObject.hpp>
 #include <fstream>
 #include <vector>
 #include <set>
 #include <filesystem>
+#include <cmath>
 
 // ---- defensive: kill Windows SDK macros that collide with C++ identifiers ----
 #ifdef IN
@@ -59,7 +60,7 @@ struct BotState {
     bool active = false;
     bool isHoldingJump = false;
     int jumpHoldFrames = 0;
-    std::set<int> deathPositions;  // X coords where we died (learning)
+    std::set<int> deathPositions;
     int totalDeaths = 0;
     float bestPercent = 0.0f;
     std::string currentLevelName = "";
@@ -88,25 +89,25 @@ struct BotState {
                 float oy = obj->getPositionY();
                 float dx = ox - px;
                 float dy = std::abs(oy - py);
-                if (dx < 5 || dx > 180) continue;
-                if (dy > 100) continue;
+                if (dx < 5.0f || dx > 180.0f) continue;
+                if (dy > 100.0f) continue;
 
                 int id = obj->m_objectID;
                 // Spikes
                 if (id == 8 || id == 9 || id == 39 || id == 103 ||
                     id == 216 || id == 217 || id == 218 || id == 219 ||
                     id == 392 || id == 397 || id == 458 || id == 459) {
-                    if (dx < 90) return true;
+                    if (dx < 90.0f) return true;
                 }
                 // Blocks
                 if (id == 40 || id == 41 || id == 42 || id == 43 ||
                     id == 44 || id == 467 || id == 468) {
-                    if (dx < 60) return true;
+                    if (dx < 60.0f) return true;
                 }
                 // Orbs (jump rings)
                 if (id == 36 || id == 84 || id == 141 || id == 1022 ||
                     id == 1330 || id == 1333 || id == 1594 || id == 1751) {
-                    if (dx < 50 && dx > 10) return true;
+                    if (dx < 50.0f && dx > 10.0f) return true;
                 }
             }
         }
@@ -147,7 +148,7 @@ struct BotState {
         auto path = getMacroPath();
         std::ofstream out(path);
         if (!out.is_open()) {
-            log::warn("Failed to save macro to {}", path.string());
+            log::warn("Failed to save macro");
             return;
         }
         out << "GDAI1\n";
@@ -158,7 +159,7 @@ struct BotState {
             out << "DEATH " << dx << "\n";
         }
         out.close();
-        log::info("Macro saved: {} ({} deaths)", path.string(), deathPositions.size());
+        log::info("Macro saved ({} death positions)", deathPositions.size());
     }
 
     void loadMacro() {
@@ -180,7 +181,7 @@ struct BotState {
                 totalDeaths = std::atoi(line.c_str() + 7);
             }
         }
-        log::info("Macro loaded: {} death positions, best={}%, total deaths={}",
+        log::info("Macro loaded: {} deaths positions, best={}%, total={}",
                   deathPositions.size(), bestPercent, totalDeaths);
     }
 };
@@ -190,9 +191,11 @@ static int g_tickCount = 0;
 
 // ============================================================
 // F5 keybind via CCKeyboardDispatcher hook
+// IMPORTANT: Geode 5.6.1 / cocos2d for GD 2.2081 requires 4 parameters
+// signature: bool(enumKeyCodes, bool isKeyDown, bool isKeyRepeat, double)
 // ============================================================
 class $modify(MyKeyboardDispatcher, cocos2d::CCKeyboardDispatcher) {
-    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat) {
+    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat, double delta) {
         if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
             g_bot.active = !g_bot.active;
             log::info(">>> F5 pressed — Bot {} <<<", g_bot.active ? "ENABLED" : "DISABLED");
@@ -202,12 +205,12 @@ class $modify(MyKeyboardDispatcher, cocos2d::CCKeyboardDispatcher) {
                 1.5f
             )->show();
         }
-        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat);
+        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
     }
 };
 
 // ============================================================
-// PlayLayer hooks: init, update (the main brain), destroy, complete
+// PlayLayer hooks: init, update (the brain), destroyPlayer, levelComplete
 // ============================================================
 class $modify(BotPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
@@ -220,7 +223,7 @@ class $modify(BotPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
 
-        // Heartbeat log (every 60 frames ≈ 1 sec)
+        // Heartbeat log every ~1 second
         g_tickCount++;
         if (g_tickCount % 60 == 0) {
             log::info("tick #{} (active={}, deaths={})",
@@ -233,7 +236,7 @@ class $modify(BotPlayLayer, PlayLayer) {
         bool shouldJump = g_bot.shouldJump(this);
 
         if (shouldJump && !g_bot.isHoldingJump) {
-            // Try BOTH methods — one of them MUST work in 2.2081
+            // Try BOTH methods - one will work in 2.2081
             this->handleButton(true, 1, true);
             this->m_player1->pushButton(PlayerButton::Jump);
             g_bot.isHoldingJump = true;
@@ -267,7 +270,7 @@ class $modify(BotPlayLayer, PlayLayer) {
 // ============================================================
 $on_mod(Loaded) {
     log::info("================================================");
-    log::info("=== chillbot v1.0.10-FINAL loaded ===");
+    log::info("=== chillbot v1.0.11-FINAL loaded ===");
     log::info("=== by Ivanogolik | Geode 5.6.1 | GD 2.2081 ===");
     log::info("================================================");
 
@@ -276,7 +279,7 @@ $on_mod(Loaded) {
         log::info("BetterEdit detected");
     }
     if (loader->isModLoaded("geode.custom-keybinds")) {
-        log::info("Custom Keybinds detected — F5 default");
+        log::info("Custom Keybinds detected");
     }
     if (loader->isModLoaded("geode.devtools")) {
         log::info("DevTools detected");
