@@ -1,4 +1,4 @@
-// Defensive: kill Windows SDK macros BEFORE any Geode header includes them
+// Defensive: kill Windows SDK macros BEFORE any Geode header includes them проверочка на изменение
 #ifdef _WIN32
   #ifndef NOMINMAX
     #define NOMINMAX
