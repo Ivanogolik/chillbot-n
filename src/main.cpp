@@ -9,11 +9,6 @@
 
 using namespace geode::prelude;
 
-#ifdef GEODE_IS_WINDOWS
-#include <geode.custom-keybinds/include/Keybinds.hpp>
-using namespace keybinds;
-#endif
-
 // ========== ИИ ЯДРО ==========
 struct AIState {
     float x, y, velY, rot;
@@ -123,21 +118,6 @@ public:
         currentReplay.framerate = 240.0;
         currentReplay.botInfo = {"chillbot", "1.0.0"};
         
-        // DevTools интеграция
-        #ifdef GEODE_DEVTOOLS
-        if (Loader::get()->isModLoaded("geode.devtools")) {
-            devtools::waitForDevTools([]{
-                devtools::registerNode<AIBot>([](AIBot* bot){
-                    devtools::label("chillbot");
-                    devtools::checkbox("Enabled", &bot->enabled);
-                    devtools::property("Best %", bot->bestPercent);
-                    devtools::property("Deaths", bot->deaths);
-                    devtools::button("Save Weights", []{ AIBot::get()->net.save(); });
-                });
-            });
-        }
-        #endif
-
         scheduleUpdate();
         return true;
     }
@@ -252,6 +232,15 @@ public:
 };
 
 // ========== ХУКИ ==========
+class $modify(AIUILayer, UILayer) {
+    void keyDown(enumKeyCodes key) {
+        if (key == enumKeyCodes::KEY_F5) {
+            AIBot::get()->toggle();
+        }
+        UILayer::keyDown(key);
+    }
+};
+
 class $modify(AIPlayLayer, PlayLayer) {
     bool init(GJGameLevel* lvl, bool useReplay, bool dontCreate) {
         if(!PlayLayer::init(lvl, useReplay, dontCreate)) return false;
@@ -292,28 +281,3 @@ class $modify(AIPlayer, PlayerObject) {
     }
 };
 
-// ========== КЕЙБИНД F5 ==========
-$execute {
-    // Регистрируем бинд через новый Geode API (2.208+)
-    BindManager::get()->registerBindable({
-        "toggle-ai"_spr,
-        "Включить ИИ бота",
-        "Запуск/остановка обучения",
-        { Keybind::create(KEY_F5) },
-        "chillbot/Управление"
-    });
-
-    new EventListener([](InvokeBindEvent* e){
-        if(e->isDown()) AIBot::get()->toggle();
-        return ListenerResult::Stop;
-    }, InvokeBindFilter(nullptr, "toggle-ai"_spr));
-
-    // Добавляем в сцену
-    std::thread([]{
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        Loader::get()->queueInMainThread([]{
-            if(auto scene = CCDirector::sharedDirector()->getRunningScene())
-                scene->addChild(AIBot::get());
-        });
-    }).detach();
-}
