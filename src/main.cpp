@@ -1,16 +1,16 @@
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
-#include 
+#include <Geode/Geode.hpp>
+#include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/PlayerObject.hpp>
+#include <Geode/modify/UILayer.hpp>
+#include <Geode/binding/GJBaseGameLayer.hpp>
+#include <gdr/gdr.hpp>
+#include <random>
+#include <fstream>
 
 using namespace geode::prelude;
 
 #ifdef GEODE_IS_WINDOWS
-#include 
+#include <geode.custom-keybinds/include/Keybinds.hpp>
 using namespace keybinds;
 #endif
 
@@ -33,8 +33,14 @@ public:
 
     void init() {
         std::mt19937 rng(std::random_device{}());
-        std::normal_distribution nd(0, 0.5f);
-        for (int i=0;i forward(const AIState& s) {
+        std::normal_distribution<float> nd(0, 0.5f);
+        for (int i=0;i<IN;i++) for(int h=0;h<HID;h++) w1[i][h]=nd(rng)*0.5f;
+        for(int h=0;h<HID;h++) b1[h]=0;
+        for(int h=0;h<HID;h++) for(int o=0;o<OUT;o++) w2[h][o]=nd(rng)*0.5f;
+        for(int o=0;o<OUT;o++) b2[o]=0;
+    }
+
+    std::array<float,OUT> forward(const AIState& s) {
         float in[IN] = {
             s.x / 10000.f,
             s.y / 1000.f,
@@ -44,12 +50,41 @@ public:
             s.upsideDown ? 1.f : 0.f
         };
         float h[HID];
-        for(int j=0;j 0 ? sum : sum*0.01f; // leaky relu
+        for(int j=0;j<HID;j++) {
+            float sum = b1[j];
+            for(int i=0;i<IN;i++) sum += in[i]*w1[i][j];
+            h[j] = sum > 0 ? sum : sum*0.01f; // leaky relu
         }
-        std::array out;
-        for(int k=0;k0?sum:sum*0.01f; }
+        std::array<float,OUT> out;
+        for(int k=0;k<OUT;k++) {
+            float sum = b2[k];
+            for(int j=0;j<HID;j++) sum += h[j]*w2[k][j];
+            out[k] = 1.f / (1.f + expf(-sum)); // sigmoid
+        }
+        return out;
+    }
+
+    void train(const AIState& s, int action, float reward) {
+        // упрощенный Q-learning шаг
+        auto pred = forward(s);
+        float target[OUT] = { pred[0], pred[1] };
+        target[action] = std::clamp(pred[action] + lr * (reward - pred[action]), 0.f, 1.f);
         
-        for(int k=0;kgetSaveDir() / "ai_weights.bin";
+        // backprop (сокращенный)
+        float in[IN] = { s.x/10000.f, s.y/1000.f, s.velY/1000.f, s.distToObstacle/500.f, s.gamemode/6.f, s.upsideDown?1.f:0.f };
+        float h[HID];
+        for(int j=0;j<HID;j++) { float sum=b1[j]; for(int i=0;i<IN;i++) sum+=in[i]*w1[i][j]; h[j]=sum>0?sum:sum*0.01f; }
+        
+        for(int k=0;k<OUT;k++) {
+            float err = target[k] - pred[k];
+            float grad = err * pred[k] * (1-pred[k]);
+            for(int j=0;j<HID;j++) w2[j][k] += lr * grad * h[j];
+            b2[k] += lr * grad;
+        }
+    }
+
+    void save() {
+        auto path = Mod::get()->getSaveDir() / "ai_weights.bin";
         std::ofstream f(path, std::ios::binary);
         f.write((char*)w1, sizeof w1); f.write((char*)b1, sizeof b1);
         f.write((char*)w2, sizeof w2); f.write((char*)b2, sizeof b2);
@@ -60,7 +95,7 @@ public:
         std::ifstream f(path, std::ios::binary);
         f.read((char*)w1, sizeof w1); f.read((char*)b1, sizeof b1);
         f.read((char*)w2, sizeof w2); f.read((char*)b2, sizeof b2);
-        lr = Mod::get()->getSettingValue("learning-rate");
+        lr = Mod::get()->getSettingValue<float>("learning-rate");
     }
 };
 
@@ -75,15 +110,15 @@ public:
     bool enabled = false;
     NeuralNet net;
     gdr::Replay currentReplay;
-    std::vector history;
-    std::vector actions;
+    std::vector<AIState> history;
+    std::vector<int> actions;
     float bestPercent = 0;
     int deaths = 0;
     PlayLayer* pl = nullptr;
 
     bool init() {
         net.load();
-        enabled = Mod::get()->getSettingValue("ai-enabled");
+        enabled = Mod::get()->getSettingValue<bool>("ai-enabled");
         currentReplay = gdr::Replay("chillbot", 1);
         currentReplay.framerate = 240.0;
         currentReplay.botInfo = {"chillbot", "1.0.0"};
@@ -92,7 +127,7 @@ public:
         #ifdef GEODE_DEVTOOLS
         if (Loader::get()->isModLoaded("geode.devtools")) {
             devtools::waitForDevTools([]{
-                devtools::registerNode([](AIBot* bot){
+                devtools::registerNode<AIBot>([](AIBot* bot){
                     devtools::label("chillbot");
                     devtools::checkbox("Enabled", &bot->enabled);
                     devtools::property("Best %", bot->bestPercent);
@@ -131,7 +166,7 @@ public:
         s.distToObstacle = 500.f;
         if(pl->m_objects) {
             float minDist = 9999;
-            for(auto obj : CCArrayExt(pl->m_objects)) {
+            for(auto obj : CCArrayExt<GameObject*>(pl->m_objects)) {
                 if(!obj || obj->m_objectType != GameObjectType::Hazard) continue;
                 float d = obj->getPositionX() - s.x;
                 if(d > 0 && d < minDist) minDist = d;
@@ -178,7 +213,7 @@ public:
         history.clear(); actions.clear();
         
         // сохраняем если рекорд
-        if(percent > bestPercent && Mod::get()->getSettingValue("save-replays")) {
+        if(percent > bestPercent && Mod::get()->getSettingValue<bool>("save-replays")) {
             bestPercent = percent;
             currentReplay.duration = pl->m_levelLength;
             currentReplay.levelInfo = { pl->m_level->m_levelID, pl->m_level->m_levelName };
@@ -193,7 +228,10 @@ public:
         if(!enabled) return;
         float percent = 100.f;
         // вознаграждаем всю историю
-        for(size_t i=0;ishow();
+        for(size_t i=0;i<history.size();i++) net.train(history[i], actions[i], 1.0f);
+        saveReplay(percent);
+        net.save();
+        Notification::create("Уровень пройден ИИ!", NotificationIcon::Success)->show();
     }
 
     void saveReplay(float percent) {
