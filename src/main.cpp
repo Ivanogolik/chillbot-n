@@ -1,26 +1,31 @@
-// Defensive: kill Windows SDK macros BEFORE any Geode header includes them проверочка на изменение
+// ============================================================
+// chillbot v1.0.10-FINAL by Ivanogolik
+// AI bot for Geometry Dash 2.2081 / Geode 5.6.1
+// ============================================================
+
 #ifdef _WIN32
-  #ifndef NOMINMAX
-    #define NOMINMAX
-  #endif
-  #ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-  #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
 #endif
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/MenuLayer.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include <Geode/loader/Loader.hpp>
 #include <Geode/loader/Mod.hpp>
 #include <Geode/utils/file.hpp>
 #include <Geode/binding/PlayerObject.hpp>
 #include <Geode/binding/GJBaseGameLayer.hpp>
+#include <Geode/binding/GJGameLevel.hpp>
 #include <fstream>
 #include <vector>
-#include <random>
+#include <set>
 #include <filesystem>
-#include <string>
 
 // ---- defensive: kill Windows SDK macros that collide with C++ identifiers ----
 #ifdef IN
@@ -48,193 +53,234 @@
 using namespace geode::prelude;
 
 // ============================================================
-// chillbot — AI bot for Geometry Dash 2.2081 / Geode 5.6.1
-// Author: Ivanogolik
+// Bot state (global instance)
 // ============================================================
+struct BotState {
+    bool active = false;
+    bool isHoldingJump = false;
+    int jumpHoldFrames = 0;
+    std::set<int> deathPositions;  // X coords where we died (learning)
+    int totalDeaths = 0;
+    float bestPercent = 0.0f;
+    std::string currentLevelName = "";
 
-struct InputFrame {
-    int      frame;     // physics frame number
-    float    xpos;      // player x position
-    bool     hold;      // jump hold state
-    uint8_t  button;    // 1 = jump, 2 = orb-like (currently only 1 used)
-};
-
-class Chillbot {
-public:
-    static Chillbot& get() {
-        static Chillbot inst;
-        return inst;
-    }
-
-    bool enabled       = false;
-    bool recording     = true;   // record successful runs
-    bool playing       = false;  // replay best macro
-    int  attempt       = 0;
-    int  bestFrame     = 0;
-    PlayLayer* layer   = nullptr;
-
-    std::vector<InputFrame> currentRun;
-    std::vector<InputFrame> bestMacro;
-
-    std::mt19937 rng{ std::random_device{}() };
-
-    std::filesystem::path savePath() {
-        return Mod::get()->getSaveDir() / "chillbot_macro.gdai";
-    }
-
-    void onLevelStart(PlayLayer* pl) {
-        layer = pl;
-        attempt++;
-        currentRun.clear();
-        if (bestMacro.empty()) loadMacro();
-    }
-
-    void onLevelReset() {
-        currentRun.clear();
-    }
-
-    void onLevelComplete() {
-        if (!enabled) return;
-        if (currentRun.size() > bestMacro.size()) {
-            bestMacro = currentRun;
-            saveMacro();
-            Notification::create("chillbot: new best run saved!", NotificationIcon::Success)->show();
-        }
-    }
-
-    // Simple "AI": looks at obstacles ahead via player Y velocity heuristics.
-    // This is intentionally a placeholder — real obstacle detection requires
-    // scanning level objects, which is left as a learning loop:
-    // each attempt the bot mutates timings and keeps the longest survival.
-    bool decideJump(PlayLayer* pl) {
+    bool shouldJump(PlayLayer* pl) {
         if (!pl || !pl->m_player1) return false;
+        auto player = pl->m_player1;
+        float px = player->getPositionX();
+        float py = player->getPositionY();
 
-        // Replay best macro if we have one and bot is in "play" mode
-        if (playing && !bestMacro.empty()) {
-            int frame = (int)currentRun.size();
-            for (auto& f : bestMacro) {
-                if (f.frame == frame) return f.hold;
+        // 1) Learned death zones — jump preemptively
+        for (int dx : deathPositions) {
+            float dist = (float)dx - px;
+            if (dist > 0 && dist < 60) {
+                return true;
             }
-            return false;
         }
 
-        // Learning mode: small random perturbations.
-        // Real obstacle scanning would require iterating m_objects;
-        // this minimal version mutates timings each attempt and keeps
-        // the longest survival as the new "best" macro.
-        std::uniform_int_distribution<int> chance(0, 100);
-        if (chance(rng) < 6) return true;
+        // 2) Scan objects ahead for hazards
+        if (pl->m_objects) {
+            int count = pl->m_objects->count();
+            for (int i = 0; i < count; ++i) {
+                auto obj = static_cast<GameObject*>(pl->m_objects->objectAtIndex(i));
+                if (!obj) continue;
+                float ox = obj->getPositionX();
+                float oy = obj->getPositionY();
+                float dx = ox - px;
+                float dy = std::abs(oy - py);
+                if (dx < 5 || dx > 180) continue;
+                if (dy > 100) continue;
+
+                int id = obj->m_objectID;
+                // Spikes
+                if (id == 8 || id == 9 || id == 39 || id == 103 ||
+                    id == 216 || id == 217 || id == 218 || id == 219 ||
+                    id == 392 || id == 397 || id == 458 || id == 459) {
+                    if (dx < 90) return true;
+                }
+                // Blocks
+                if (id == 40 || id == 41 || id == 42 || id == 43 ||
+                    id == 44 || id == 467 || id == 468) {
+                    if (dx < 60) return true;
+                }
+                // Orbs (jump rings)
+                if (id == 36 || id == 84 || id == 141 || id == 1022 ||
+                    id == 1330 || id == 1333 || id == 1594 || id == 1751) {
+                    if (dx < 50 && dx > 10) return true;
+                }
+            }
+        }
         return false;
     }
 
-    void recordFrame(PlayLayer* pl, bool hold) {
+    void onDeath(PlayLayer* pl) {
         if (!pl || !pl->m_player1) return;
-        InputFrame f;
-        f.frame  = (int)currentRun.size();
-        f.xpos   = pl->m_player1->getPositionX();
-        f.hold   = hold;
-        f.button = 1;
-        currentRun.push_back(f);
+        int px = (int)pl->m_player1->getPositionX();
+        deathPositions.insert(px - 30);
+        totalDeaths++;
+        log::info("Death at X={}, total deaths={}", px, totalDeaths);
+        saveMacro();
+    }
+
+    void onLevelInit(PlayLayer* pl) {
+        if (!pl || !pl->m_level) return;
+        currentLevelName = pl->m_level->m_levelName;
+        log::info("Level loaded: {}", currentLevelName);
+        loadMacro();
+    }
+
+    void onLevelComplete(PlayLayer* pl) {
+        if (!pl) return;
+        log::info("LEVEL COMPLETE!");
+        bestPercent = 100.0f;
+        saveMacro();
+    }
+
+    std::filesystem::path getMacroPath() {
+        auto dir = Mod::get()->getSaveDir();
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        return dir / "chillbot_macro.gdai";
     }
 
     void saveMacro() {
-        std::ofstream out(savePath(), std::ios::binary);
-        if (!out) return;
-        out << "GDAI1\n";
-        out << bestMacro.size() << "\n";
-        for (auto& f : bestMacro) {
-            out << f.frame << " " << f.xpos << " "
-                << (f.hold ? 1 : 0) << " " << (int)f.button << "\n";
+        auto path = getMacroPath();
+        std::ofstream out(path);
+        if (!out.is_open()) {
+            log::warn("Failed to save macro to {}", path.string());
+            return;
         }
+        out << "GDAI1\n";
+        out << "LEVEL " << currentLevelName << "\n";
+        out << "BEST " << bestPercent << "\n";
+        out << "DEATHS " << totalDeaths << "\n";
+        for (int dx : deathPositions) {
+            out << "DEATH " << dx << "\n";
+        }
+        out.close();
+        log::info("Macro saved: {} ({} deaths)", path.string(), deathPositions.size());
     }
 
     void loadMacro() {
-        std::ifstream in(savePath(), std::ios::binary);
-        if (!in) return;
-        std::string magic; in >> magic;
-        if (magic != "GDAI1") return;
-        size_t n; in >> n;
-        bestMacro.clear();
-        bestMacro.reserve(n);
-        for (size_t i = 0; i < n; ++i) {
-            InputFrame f; int hold, btn;
-            in >> f.frame >> f.xpos >> hold >> btn;
-            f.hold = hold != 0;
-            f.button = (uint8_t)btn;
-            bestMacro.push_back(f);
+        auto path = getMacroPath();
+        std::ifstream in(path);
+        if (!in.is_open()) {
+            log::info("No saved macro yet (first run on this level)");
+            return;
         }
-        log::info("chillbot: loaded macro with {} frames", bestMacro.size());
-    }
-
-    void toggle() {
-        enabled = !enabled;
-        Notification::create(
-            enabled ? "chillbot: ON" : "chillbot: OFF",
-            enabled ? NotificationIcon::Success : NotificationIcon::Warning
-        )->show();
+        deathPositions.clear();
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.rfind("DEATH ", 0) == 0) {
+                int x = std::atoi(line.c_str() + 6);
+                deathPositions.insert(x);
+            } else if (line.rfind("BEST ", 0) == 0) {
+                bestPercent = (float)std::atof(line.c_str() + 5);
+            } else if (line.rfind("DEATHS ", 0) == 0) {
+                totalDeaths = std::atoi(line.c_str() + 7);
+            }
+        }
+        log::info("Macro loaded: {} death positions, best={}%, total deaths={}",
+                  deathPositions.size(), bestPercent, totalDeaths);
     }
 };
 
-// ---------- Hooks ----------
+static BotState g_bot;
+static int g_tickCount = 0;
 
-class $modify(AIPlayLayer, PlayLayer) {
-    bool init(GJGameLevel* lvl, bool useReplay, bool dontCreateObjects) {
-        if (!PlayLayer::init(lvl, useReplay, dontCreateObjects)) return false;
-        Chillbot::get().onLevelStart(this);
+// ============================================================
+// F5 keybind via CCKeyboardDispatcher hook
+// ============================================================
+class $modify(MyKeyboardDispatcher, cocos2d::CCKeyboardDispatcher) {
+    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat) {
+        if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
+            g_bot.active = !g_bot.active;
+            log::info(">>> F5 pressed — Bot {} <<<", g_bot.active ? "ENABLED" : "DISABLED");
+            Notification::create(
+                g_bot.active ? "chillbot: ENABLED" : "chillbot: DISABLED",
+                g_bot.active ? NotificationIcon::Success : NotificationIcon::Info,
+                1.5f
+            )->show();
+        }
+        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat);
+    }
+};
+
+// ============================================================
+// PlayLayer hooks: init, update (the main brain), destroy, complete
+// ============================================================
+class $modify(BotPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+        g_bot.onLevelInit(this);
+        g_tickCount = 0;
         return true;
     }
 
-    void resetLevel() {
-        PlayLayer::resetLevel();
-        Chillbot::get().onLevelReset();
+    void update(float dt) {
+        PlayLayer::update(dt);
+
+        // Heartbeat log (every 60 frames ≈ 1 sec)
+        g_tickCount++;
+        if (g_tickCount % 60 == 0) {
+            log::info("tick #{} (active={}, deaths={})",
+                      g_tickCount, g_bot.active ? 1 : 0, g_bot.totalDeaths);
+        }
+
+        if (!g_bot.active) return;
+        if (!this->m_player1) return;
+
+        bool shouldJump = g_bot.shouldJump(this);
+
+        if (shouldJump && !g_bot.isHoldingJump) {
+            // Try BOTH methods — one of them MUST work in 2.2081
+            this->handleButton(true, 1, true);
+            this->m_player1->pushButton(PlayerButton::Jump);
+            g_bot.isHoldingJump = true;
+            g_bot.jumpHoldFrames = 0;
+            log::info("JUMP! at X={}", (int)this->m_player1->getPositionX());
+        } else if (g_bot.isHoldingJump) {
+            g_bot.jumpHoldFrames++;
+            if (g_bot.jumpHoldFrames > 6 || !shouldJump) {
+                this->handleButton(false, 1, true);
+                this->m_player1->releaseButton(PlayerButton::Jump);
+                g_bot.isHoldingJump = false;
+            }
+        }
+    }
+
+    void destroyPlayer(PlayerObject* p, GameObject* o) {
+        if (g_bot.active) {
+            g_bot.onDeath(this);
+        }
+        PlayLayer::destroyPlayer(p, o);
     }
 
     void levelComplete() {
+        g_bot.onLevelComplete(this);
         PlayLayer::levelComplete();
-        Chillbot::get().onLevelComplete();
-    }
-
-    // PlayLayer::update runs every physics frame in 2.2081
-    void update(float dt) {
-        PlayLayer::update(dt);
-        auto& bot = Chillbot::get();
-        if (!bot.enabled) return;
-        if (!this->m_player1) return;
-
-        bool jump = bot.decideJump(this);
-        if (jump) {
-            this->m_player1->pushButton(PlayerButton::Jump);
-        } else {
-            this->m_player1->releaseButton(PlayerButton::Jump);
-        }
-        bot.recordFrame(this, jump);
     }
 };
 
-// ---------- F5 keybind (hard-coded fallback) ----------
-// Geode 5.6.1 / cocos2d-x signature: dispatchKeyboardMSG(enumKeyCodes, bool, bool, double)
-// The 4th double parameter was added in newer bindings; we must match exactly.
-
-class $modify(AIKeyDispatcher, cocos2d::CCKeyboardDispatcher) {
-    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat, double delta) {
-        if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
-            Chillbot::get().toggle();
-            return true;
-        }
-        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
-    }
-};
-
-// ---------- Entry ----------
-
+// ============================================================
+// Mod entry point
+// ============================================================
 $on_mod(Loaded) {
-    log::info("chillbot loaded | by Ivanogolik | Geode {} | GD 2.2081",
-              Mod::get()->getVersion().toVString());
+    log::info("================================================");
+    log::info("=== chillbot v1.0.10-FINAL loaded ===");
+    log::info("=== by Ivanogolik | Geode 5.6.1 | GD 2.2081 ===");
+    log::info("================================================");
 
-    if (Loader::get()->isModLoaded("hjfod.betteredit"))
-        log::info("BetterEdit detected — extra editor features available");
-    if (Loader::get()->isModLoaded("geode.custom-keybinds"))
-        log::info("Custom Keybinds detected — F5 can be rebound in settings");
-    if (Loader::get()->isModLoaded("geode.devtools"))
-        log::info("DevTools detected — debug overlay available");
+    auto loader = Loader::get();
+    if (loader->isModLoaded("hjfod.betteredit")) {
+        log::info("BetterEdit detected");
+    }
+    if (loader->isModLoaded("geode.custom-keybinds")) {
+        log::info("Custom Keybinds detected — F5 default");
+    }
+    if (loader->isModLoaded("geode.devtools")) {
+        log::info("DevTools detected");
+    }
+
+    log::info("===== READY (press F5 in level to toggle bot) =====");
 }
