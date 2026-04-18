@@ -1,8 +1,21 @@
+// Defensive: kill Windows SDK macros BEFORE any Geode header includes them
+#ifdef _WIN32
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+#endif
+
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/CCKeyboardDispatcher.hpp>
 #include <Geode/loader/Loader.hpp>
 #include <Geode/loader/Mod.hpp>
+#include <Geode/utils/file.hpp>
+#include <Geode/binding/PlayerObject.hpp>
+#include <Geode/binding/GJBaseGameLayer.hpp>
 #include <fstream>
 #include <vector>
 #include <random>
@@ -95,7 +108,6 @@ public:
     // each attempt the bot mutates timings and keeps the longest survival.
     bool decideJump(PlayLayer* pl) {
         if (!pl || !pl->m_player1) return false;
-        auto p = pl->m_player1;
 
         // Replay best macro if we have one and bot is in "play" mode
         if (playing && !bestMacro.empty()) {
@@ -106,10 +118,12 @@ public:
             return false;
         }
 
-        // Learning mode: small random perturbations + survival heuristic
-        bool onGround = p->m_isOnGround;
+        // Learning mode: small random perturbations.
+        // Real obstacle scanning would require iterating m_objects;
+        // this minimal version mutates timings each attempt and keeps
+        // the longest survival as the new "best" macro.
         std::uniform_int_distribution<int> chance(0, 100);
-        if (onGround && chance(rng) < 8) return true;
+        if (chance(rng) < 6) return true;
         return false;
     }
 
@@ -132,7 +146,6 @@ public:
             out << f.frame << " " << f.xpos << " "
                 << (f.hold ? 1 : 0) << " " << (int)f.button << "\n";
         }
-        out.close();
     }
 
     void loadMacro() {
@@ -181,11 +194,12 @@ class $modify(AIPlayLayer, PlayLayer) {
         Chillbot::get().onLevelComplete();
     }
 
+    // PlayLayer::update runs every physics frame in 2.2081
     void update(float dt) {
         PlayLayer::update(dt);
         auto& bot = Chillbot::get();
         if (!bot.enabled) return;
-        if (m_isPaused || !m_player1) return;
+        if (!this->m_player1) return;
 
         bool jump = bot.decideJump(this);
         if (jump) {
@@ -197,18 +211,17 @@ class $modify(AIPlayLayer, PlayLayer) {
     }
 };
 
-// ---------- F5 keybind (default, hard-coded fallback) ----------
-// If geode.custom-keybinds is loaded, users can rebind via its UI;
-// here we provide a baseline keyboard listener so the bot works
-// even without that mod installed.
+// ---------- F5 keybind (hard-coded fallback) ----------
+// Geode 5.6.1 / cocos2d-x signature: dispatchKeyboardMSG(enumKeyCodes, bool, bool, double)
+// The 4th double parameter was added in newer bindings; we must match exactly.
 
-class $modify(AIKeyDispatcher, CCKeyboardDispatcher) {
-    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat) {
+class $modify(AIKeyDispatcher, cocos2d::CCKeyboardDispatcher) {
+    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat, double delta) {
         if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
             Chillbot::get().toggle();
             return true;
         }
-        return CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat);
+        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
     }
 };
 
