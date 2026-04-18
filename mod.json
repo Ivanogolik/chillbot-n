@@ -6,24 +6,22 @@
         "mac": "2.2081",
         "ios": "2.2081"
     },
-    "version": "v1.0.2",
+    "version": "v1.0.3",
     "id": "ivanogolik.chillbot",
     "name": "chillbot",
-    "developer": "Ivanogolik",
+    "developers": ["Ivanogolik"],
     "description": "AI bot that learns to play levels and saves macros (zBot/Eclipse-like).",
     "tags": ["gameplay", "utility"],
-    "dependencies": [
-        {
-            "id": "geode.custom-keybinds",
+    "dependencies": {
+        "geode.custom-keybinds": {
             "version": ">=2.0.0",
             "importance": "recommended"
         },
-        {
-            "id": "geode.devtools",
+        "geode.devtools": {
             "version": ">=1.0.0",
             "importance": "suggested"
         }
-    ],
+    },
     "settings": {
         "recording-enabled": {
             "type": "bool",
