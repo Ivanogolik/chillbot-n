@@ -1,0 +1,426 @@
+# 🤖 AI CONTEXT — chillbot project
+
+> **Этот файл — для ИИ-ассистента (Claude / ChatGPT / Gemini / любого).**
+> Прочитай его ПОЛНОСТЬЮ перед тем как помогать с этим проектом.
+> Здесь весь контекст: история, что работает, что нет, какие API правильные.
+
+---
+
+## 📋 КРАТКО О ПРОЕКТЕ
+
+- **Имя мода:** chillbot
+- **Автор:** Ivanogolik
+- **Тип:** Geode мод для Geometry Dash
+- **Цель:** ИИ-бот, автоматически проходит уровни и обучается на смертях
+- **Платформа:** Geometry Dash 2.2081, Geode SDK 5.6.1
+- **Репозиторий:** https://github.com/Ivanogolik/chillbot-n
+- **Сборка:** GitHub Actions (`geode-sdk/build-geode-mod@main`)
+- **ID мода:** `ivanogolik.chillbot` (строго lowercase!)
+- **Текущая версия:** v1.0.23-SMARTBOT (бот РАБОТАЕТ, прыгает физически)
+
+---
+
+## 🎯 ТРЕБОВАНИЯ ОТ ПОЛЬЗОВАТЕЛЯ
+
+1. C++ код для Geode мода (главный файл `src/main.cpp`)
+2. Бот должен:
+   - Автоматически проходить уровни (прыгать через шипы, на блоки, активировать орбы)
+   - Обучаться (запоминать где умер, прыгать заранее в этих местах)
+   - Сохранять прогресс в файл (формат как у zBot/Eclipse)
+3. Интеграция с модами через soft-check (`Loader::isModLoaded`):
+   - **BetterEdit** (`hjfod.betteredit`)
+   - **Custom Keybinds** (`geode.custom-keybinds`)
+   - **DevTools** (`geode.devtools`)
+4. Управление:
+   - **F5** — включить/выключить бота
+   - **L** — заблокировать/разрешить ввод игрока
+   - **K** — включить debug сканер объектов
+5. Авто-старт бота при заходе на уровень (`autoStart = true`)
+6. Блокировка ввода игрока когда бот активен (опционально, по умолчанию ВКЛ)
+
+---
+
+## ⚠️ КРИТИЧНО: правильные сигнатуры для bindings 2.2081 / Geode 5.6.1
+
+Проверено через xdBot 3.4.0, EchoBot, и официальные Geode docs.
+
+```cpp
+// CCKeyboardDispatcher — 4 ПАРАМЕТРА (последний — double):
+bool dispatchKeyboardMSG(enumKeyCodes key, bool isKeyDown, bool isKeyRepeat, double delta)
+
+// PlayLayer / GJBaseGameLayer:
+void handleButton(bool down, int button, bool isPlayer1)
+void queueButton(int button, bool push, bool isPlayer2, double timestamp)
+bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects)
+void destroyPlayer(PlayerObject* p, GameObject* o)
+void resetLevel()
+void levelComplete()                          // БЕЗ параметров
+void update(float dt)
+
+// PlayerObject:
+void pushButton(PlayerButton button)          // PlayerButton::Jump для прыжка
+void releaseButton(PlayerButton button)
+void propellPlayer(float yVelocity, bool noEffects, int objectType)  // 3 ПАРАМЕТРА!
+double m_yVelocity                            // публичное поле физики
+```
+
+### ❌ ЗАПРЕЩЕНО (вызовет ошибки компиляции):
+
+```cpp
+m_isHolding                          // ❌ нет такого поля в bindings 2.2081
+m_isOnGround                         // ❌ нет такого поля как public
+NotificationCenter::postNotification // ❌ deprecated, использовать Notification::create
+KeybindManager / BindManager         // ❌ нет в Geode 5.6.1
+#include <geode.custom-keybinds/include/Keybinds.hpp>  // ❌ нет такого хедера
+dynamic_cast                         // ❌ Geode guidelines запрещают, использовать typeinfo_cast
+try / catch                          // ❌ Geode guidelines запрещают
+.string() на std::filesystem::path  // ❌ может крашить
+```
+
+### ✅ ОБЯЗАТЕЛЬНЫЕ ЗАЩИТЫ:
+
+```cpp
+// В САМОМ НАЧАЛЕ файла — ДО using namespace:
+#ifdef _WIN32
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+#endif
+
+#include <Geode/Geode.hpp>
+// ... остальные includes ...
+
+// ПОСЛЕ includes но ДО using namespace — убить Windows SDK макросы:
+#ifdef IN
+#undef IN
+#endif
+#ifdef OUT
+#undef OUT
+#endif
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+
+using namespace geode::prelude;
+```
+
+---
+
+## 📦 ПРАВИЛЬНЫЙ `mod.json` (Geode 5.6.1)
+
+```json
+{
+    "geode": "5.6.1",
+    "gd": {
+        "win": "2.2081",
+        "android": "2.2081",
+        "mac": "2.2081",
+        "ios": "2.2081"
+    },
+    "version": "v1.0.23",
+    "id": "ivanogolik.chillbot",
+    "name": "chillbot",
+    "developers": ["Ivanogolik"],
+    "description": "AI bot that learns to play levels.",
+    "tags": ["gameplay", "utility"],
+    "dependencies": {
+        "geode.custom-keybinds": {
+            "version": ">=2.0.0"
+        },
+        "geode.devtools": {
+            "version": ">=1.0.0"
+        }
+    }
+}
+```
+
+### ❌ Запрещено в mod.json (вызовет `Invalid Geode File`):
+
+| Ошибка | Правильно |
+|--------|-----------|
+| `"developer": "Name"` | `"developers": ["Name"]` (массив!) |
+| `"gd": "2.2081"` | `"gd": {"win": "2.2081", ...}` (объект!) |
+| `"dependencies": [{...}]` | `"dependencies": {id: spec}` (объект!) |
+| `"importance": "recommended"` внутри dep | Убрать поле — Geode 5.6.1 не поддерживает |
+| `"id": "Ivanogolik.chillbot"` | `"id": "ivanogolik.chillbot"` (только lowercase!) |
+
+---
+
+## 🔨 ПРАВИЛЬНЫЙ `CMakeLists.txt`
+
+```cmake
+cmake_minimum_required(VERSION 3.21)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+project(chillbot VERSION 1.0.0)
+
+if(NOT DEFINED ENV{GEODE_SDK})
+    message(FATAL_ERROR "GEODE_SDK environment variable is not set!")
+endif()
+
+file(GLOB_RECURSE SOURCES src/*.cpp)
+add_library(${PROJECT_NAME} SHARED ${SOURCES})
+
+if(WIN32)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS
+    )
+endif()
+
+include($ENV{GEODE_SDK}/cmake/Geode.cmake)
+setup_geode_mod(${PROJECT_NAME})
+```
+
+### ❌ Запрещено в CMakeLists.txt:
+- `include(cmake/CPM.cmake)` — нет такого файла, вызывает ошибку
+- `CPMAddPackage(GDReplayFormat...)` — не используется, мёртвый коммит
+
+---
+
+## 🔧 ИСТОРИЯ РЕШЁННЫХ ПРОБЛЕМ (НЕ ПОВТОРЯЙ ИХ!)
+
+| # | Проблема | Решение |
+|---|----------|---------|
+| 1 | `cmake/CPM.cmake not found` | Удалить `include(cmake/CPM.cmake)` из CMakeLists |
+| 2 | `GDReplayFormat` git fetch fail | Убрать зависимость, не нужна |
+| 3 | `Keybinds.hpp not found` | НЕ делать `#include` от custom-keybinds. Использовать через `Loader::isModLoaded` |
+| 4 | `expected 4, have 3` для dispatchKeyboardMSG | Добавить 4-й параметр `double delta` |
+| 5 | `IN`/`OUT`/`HID` undeclared | Добавить `#undef IN, OUT, HID...` (Windows SDK макросы ломают код) |
+| 6 | `Invalid Geode File: dependencies invalid type array` | Сменить массив `[]` на объект `{}` в mod.json |
+| 7 | `Invalid Geode File: developer expected developers` | Сменить `"developer": "X"` на `"developers": ["X"]` |
+| 8 | `gd: invalid type string, expected object` | Сменить `"gd": "2.2081"` на `"gd": {"win": "2.2081", ...}` |
+| 9 | `unknown key importance` | Убрать `"importance"` из dependency objects |
+| 10 | `no member m_isHolding in PlayerObject` | Поля нет в bindings 2.2081, не использовать |
+| 11 | `propellPlayer expected 3, have 1` | Использовать `propellPlayer(16.0f, false, 0)` |
+| 12 | `queueButton expected 4, have 3` | Использовать `queueButton(1, true, false, 0.0)` |
+| 13 | Бот загружен, но `update` не работает | Geode hash mismatch — поднять версию в mod.json |
+| 14 | Куб не прыгает несмотря на JUMP! в логе | Использовать `m_yVelocity = 16.0` (прямая физика) |
+| 15 | Бот спамит прыжок каждый кадр | Добавить cooldown + проверку `isOnGround` (vY ≈ 0) |
+| 16 | `destroyPlayer` срабатывает много раз ложно | НЕ использовать его для детекции смерти. Использовать сброс X-координаты |
+| 17 | "проверочка на изменение" в первой строке файла | Никогда не добавлять случайный текст в .cpp — ломает компиляцию |
+
+---
+
+## ✅ ПРОВЕРЕННЫЕ РАБОЧИЕ МЕТОДЫ ПРЫЖКА (для bindings 2.2081)
+
+```cpp
+// Метод 1 — стандарт (используется в EchoBot/xdBot):
+playLayer->handleButton(true, 1, true);
+
+// Метод 2 — напрямую через игрока:
+playLayer->m_player1->pushButton(PlayerButton::Jump);
+
+// Метод 3 — через базовый класс:
+static_cast<GJBaseGameLayer*>(playLayer)->handleButton(true, 1, true);
+
+// Метод 4 — buffered input:
+static_cast<GJBaseGameLayer*>(playLayer)->queueButton(1, true, false, 0.0);
+
+// Метод 5 — ПРЯМАЯ ФИЗИКА (гарантированно работает!):
+playLayer->m_player1->m_yVelocity = 16.0;
+
+// Метод 6 — встроенная функция прыжка:
+playLayer->m_player1->propellPlayer(16.0f, false, 0);
+
+// Метод 7 — симуляция Space:
+auto kd = cocos2d::CCDirector::sharedDirector()->getKeyboardDispatcher();
+kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, true, false, 0.0);
+
+// Метод 8 — симуляция стрелки вверх:
+kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Up, true, false, 0.0);
+```
+
+### ВАЖНО: прыгать ТОЛЬКО когда на земле!
+
+```cpp
+bool isOnGround(PlayerObject* p) {
+    return std::abs(p->m_yVelocity) < 0.5f;  // на земле если vY ≈ 0
+}
+```
+
+---
+
+## 🚫 БЛОКИРОВКА ВВОДА ИГРОКА
+
+```cpp
+static bool g_simulatingKey = false;  // флаг чтобы не блокировать собственные нажатия
+
+class $modify(MyKD, cocos2d::CCKeyboardDispatcher) {
+    bool dispatchKeyboardMSG(enumKeyCodes key, bool down, bool repeat, double delta) {
+        if (g_bot.active && g_bot.blockPlayerInput && !g_simulatingKey) {
+            if (key == KEY_Space || key == KEY_Up || key == KEY_W) {
+                return true;  // НЕ передаём в игру
+            }
+        }
+        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
+    }
+};
+
+// В executeJump():
+g_simulatingKey = true;   // флаг ВКЛ перед симуляцией
+g_bot.executeJump(this);
+g_simulatingKey = false;  // флаг ВЫКЛ после
+```
+
+---
+
+## 🎮 ID ОБЪЕКТОВ В GD 2.2081
+
+```cpp
+// Шипы (опасные — прыгать!):
+8, 9, 39, 88, 89, 98, 99, 100, 103, 177, 178, 179,
+216, 217, 218, 219, 392, 397, 446, 447, 458, 459
+
+// Блоки (можно запрыгнуть на них):
+1, 2, 3, 4, 5, 6, 7, 40, 41, 42, 43, 44, 467, 468
+
+// Орбы (jump rings — нажать прыжок чтобы активировать):
+36, 84, 141, 1022, 1330, 1333, 1594, 1751
+```
+
+---
+
+## 🔍 ДЕТЕКЦИЯ СМЕРТИ (правильный способ)
+
+❌ НЕ использовать хук `destroyPlayer` — другие моды (`death_tracker`, `attemptplayback`) вызывают его много раз ложно с `object_id=-1`.
+
+✅ Использовать через сброс X координаты:
+
+```cpp
+void update(float dt) {
+    PlayLayer::update(dt);
+    float px = this->m_player1->getPositionX();
+
+    // Если X резко уменьшилось — значит был ресет от смерти
+    if (px < g_bot.lastX - 100.0f && g_bot.lastX > 200.0f) {
+        int deathX = (int)g_bot.lastX;
+        g_bot.deathPositions.insert(deathX - 30);  // запоминаем для обучения
+        g_bot.realDeaths++;
+    }
+    g_bot.lastX = px;
+}
+```
+
+---
+
+## 💾 ФОРМАТ СОХРАНЕНИЯ (`chillbot_macro.gdai`)
+
+Путь: `%LocalAppData%\GeometryDash\geode\config\ivanogolik.chillbot\chillbot_macro.gdai`
+
+Формат текстовый (как zBot/Eclipse):
+```
+GDAI1
+LEVEL Stereo Madness
+BEST 87.5
+DEATHS 12
+DEATH 234
+DEATH 567
+```
+
+```cpp
+std::filesystem::path getMacroPath() {
+    auto dir = Mod::get()->getSaveDir();
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);  // ОБЯЗАТЕЛЬНО!
+    return dir / "chillbot_macro.gdai";
+}
+```
+
+---
+
+## 📊 СТАТУС ПРОЕКТА
+
+- ✅ Мод компилируется без ошибок
+- ✅ Загружается в Geode (версия определяется в логе)
+- ✅ Хуки работают: `PlayLayer::init`, `update`, `resetLevel`, `levelComplete`, `CCKeyboardDispatcher::dispatchKeyboardMSG`
+- ✅ F5 переключает бота
+- ✅ L переключает блокировку ввода игрока
+- ✅ Куб реально прыгает в игре через `m_yVelocity = 16.0`
+- ✅ Авто-старт при заходе на уровень
+- ✅ Лог `JUMP! X=N Y=N vY before=0.00 after=16.00` показывает что прыжок выполнен
+- ✅ Обучение через сохранение позиций смерти
+
+### TODO (что можно добавить):
+- Поддержка корабля/UFO (другая физика — клик удерживается)
+- Поддержка дуала
+- Распознавание орбов (зелёный, синий, чёрный, фиолетовый)
+- Распознавание порталов (gravity flip и т.д.)
+- Визуальный оверлей со статистикой в углу экрана
+- Запись/воспроизведение макросов как у zBot
+
+---
+
+## 🛠️ ПРАВИЛА РАБОТЫ С КОДОМ
+
+1. **При каждом изменении кода — поднимать версию в mod.json** (v1.0.23 → v1.0.24 → ...)
+   Иначе Geode не перепакует мод и пользователь будет видеть старую версию.
+2. **Маркер версии в логе** — добавлять строку:
+   ```cpp
+   log::info("=== chillbot vX.Y.Z-NAME loaded ===");
+   ```
+   Чтобы видеть в `geode.log` какая версия установлена.
+3. **GitHub Actions** — после коммита надо ждать ЗЕЛЁНОЙ галочки, скачать `.geode` из Artifacts, удалить старый `.geode` из `mods/` и папку из `unzipped/`, поставить свежий.
+4. **Логи** — в файле `D:\steam\steamapps\common\Geometry Dash\geode\logs\geode.log`
+   Префикс наших логов: `[chillbot]`
+5. **НЕ писать ничего "проверочка на изменение"** или другие случайные комментарии в `.cpp` — может сломать всё (был случай).
+
+---
+
+## 📁 СТРУКТУРА РЕПОЗИТОРИЯ
+
+```
+chillbot-n/
+├── src/
+│   └── main.cpp           ← основной код мода
+├── mod.json               ← манифест Geode
+├── CMakeLists.txt         ← конфигурация сборки
+├── .github/
+│   └── workflows/
+│       └── build.yml      ← GitHub Actions workflow
+├── log                    ← логи (для отладки, пользователь обновляет вручную)
+└── AI_CONTEXT.md          ← ЭТОТ ФАЙЛ
+```
+
+---
+
+## 🎯 ИНСТРУКЦИЯ ДЛЯ ИИ-АССИСТЕНТА
+
+Когда пользователь обращается с этим проектом:
+
+1. **Прочитай весь этот файл** до того как давать советы
+2. **НЕ предлагай** запрещённые конструкции (см. раздел "ЗАПРЕЩЕНО")
+3. **Используй только проверенные** методы из раздела "Рабочие методы прыжка"
+4. **Помни про hash mismatch** — каждый раз когда меняешь main.cpp, поднимай версию в mod.json
+5. **Если ошибка компиляции** — сначала проверь раздел "История решённых проблем", может уже есть фикс
+6. **При работе с GitHub** — пользователь публикует через web-интерфейс, не локально. Любые правки = Edit → Ctrl+A → Delete → Ctrl+V → Commit
+7. **НЕ редактируй файлы** случайными комментариями — ломает компиляцию
+8. **Логи** — пользователь скидывает в репо как файл `log` без расширения, читай через `web_fetch` raw URL:
+   `https://raw.githubusercontent.com/Ivanogolik/chillbot-n/main/log`
+
+### Если у тебя есть инструменты — обязательно используй их:
+- `read_file` / `web_fetch` — для проверки актуального состояния файлов в репо
+- `grep_files` — для поиска по коду
+- `web_search` — для актуальной документации Geode
+- `web_fetch` — для чтения raw URL файлов на GitHub
+
+### Когда даёшь код пользователю:
+- Давай **полный файл целиком** в одном блоке кода
+- Указывай **точное название файла** (`src/main.cpp` или `mod.json`)
+- Объясняй **что изменилось** относительно прошлой версии
+- Указывай **новый номер версии** для `mod.json`
+
+---
+
+**Удачи! 🚀**
