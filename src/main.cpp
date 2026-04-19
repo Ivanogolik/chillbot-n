@@ -1,6 +1,6 @@
 // ============================================================
-// chillbot v1.0.17-MEGAJUMP by Ivanogolik
-// Fixed signatures for propellPlayer and queueButton
+// chillbot v1.0.18-OBSERVE by Ivanogolik
+// PASSIVE: just observe what game does, no jumps
 // ============================================================
 
 #ifdef _WIN32
@@ -48,11 +48,10 @@ using namespace geode::prelude;
 
 struct BotState {
     bool active = false;
-    bool autoStart = true;
-    bool forcedJumpTest = true;
-    int forcedJumpCounter = 0;
+    bool autoStart = false;  // ВЫКЛЮЧЕНО! Нажми F5 если хочешь
     int totalDeaths = 0;
-    int jumpCycle = 0;
+    float lastX = 0.0f;
+    float lastY = 0.0f;
     std::string currentLevelName = "";
 
     void onLevelInit(PlayLayer* pl) {
@@ -62,16 +61,17 @@ struct BotState {
         if (autoStart) {
             active = true;
             log::info(">>> AUTO-ENABLED on level enter <<<");
+        } else {
+            log::info(">>> Bot is OFF - press F5 to enable observer mode <<<");
         }
-        forcedJumpCounter = 0;
-        jumpCycle = 0;
     }
 
     void onDeath(PlayLayer* pl) {
         if (!pl || !pl->m_player1) return;
         int px = (int)pl->m_player1->getPositionX();
+        int py = (int)pl->m_player1->getPositionY();
         totalDeaths++;
-        log::info("Death at X={}, total deaths={}", px, totalDeaths);
+        log::info("Death at X={} Y={} (total deaths={})", px, py, totalDeaths);
     }
 };
 
@@ -87,12 +87,7 @@ class $modify(MyKeyboardDispatcher, cocos2d::CCKeyboardDispatcher) {
         }
         if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
             g_bot.active = !g_bot.active;
-            log::info(">>> F5 - Bot {} <<<", g_bot.active ? "ENABLED" : "DISABLED");
-        }
-        if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_B) {
-            g_bot.forcedJumpTest = !g_bot.forcedJumpTest;
-            log::info(">>> B - Forced jump {} <<<",
-                      g_bot.forcedJumpTest ? "ON" : "OFF");
+            log::info(">>> F5 - Observer {} <<<", g_bot.active ? "ON" : "OFF");
         }
         return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
     }
@@ -103,114 +98,56 @@ class $modify(BotPlayLayer, PlayLayer) {
         if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
         g_bot.onLevelInit(this);
         g_tickCount = 0;
+        g_bot.lastX = 0;
+        g_bot.lastY = 0;
         return true;
     }
 
     void update(float dt) {
+        // СНАЧАЛА вызываем оригинал — НИЧЕГО НЕ ДЕЛАЕМ!
         PlayLayer::update(dt);
 
         g_tickCount++;
-        if (g_tickCount % 60 == 0) {
-            float py = this->m_player1 ? this->m_player1->getPositionY() : -1;
-            float px = this->m_player1 ? this->m_player1->getPositionX() : -1;
-            log::info("tick #{} (active={}, deaths={}, X={:.0f}, Y={:.1f})",
-                      g_tickCount, g_bot.active ? 1 : 0,
-                      g_bot.totalDeaths, px, py);
-        }
 
-        if (!g_bot.active) return;
-        if (!this->m_player1) return;
+        // Каждый кадр обновляем позицию
+        if (this->m_player1) {
+            float px = this->m_player1->getPositionX();
+            float py = this->m_player1->getPositionY();
 
-        if (g_bot.forcedJumpTest) {
-            g_bot.forcedJumpCounter++;
-
-            // НАЖАТЬ - на 60-м кадре каждой секунды
-            if (g_bot.forcedJumpCounter == 60) {
-                int method = g_bot.jumpCycle % 6;
-                log::info("=== TEST METHOD {} at X={} Y={} ===",
-                          method,
-                          (int)this->m_player1->getPositionX(),
-                          (int)this->m_player1->getPositionY());
-
-                switch (method) {
-                    case 0: {
-                        // МЕТОД A: Симуляция нажатия Space через CCKeyboardDispatcher
-                        log::info("  TRYING: dispatchKeyboardMSG(KEY_Space, true)");
-                        auto kd = cocos2d::CCDirector::sharedDirector()->getKeyboardDispatcher();
-                        if (kd) {
-                            kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, true, false, 0.0);
-                        }
-                        break;
-                    }
-                    case 1: {
-                        // МЕТОД B: Прямое изменение m_yVelocity
-                        log::info("  TRYING: m_player1->m_yVelocity = 16.0");
-                        this->m_player1->m_yVelocity = 16.0;
-                        break;
-                    }
-                    case 2: {
-                        // МЕТОД C: propellPlayer (ПРАВИЛЬНАЯ сигнатура: yVelocity, noEffects, objectType)
-                        log::info("  TRYING: m_player1->propellPlayer(16.0f, false, 0)");
-                        this->m_player1->propellPlayer(16.0f, false, 0);
-                        break;
-                    }
-                    case 3: {
-                        // МЕТОД D: queueButton (ПРАВИЛЬНАЯ сигнатура: button, push, isPlayer2, timestamp)
-                        log::info("  TRYING: queueButton(1, true, false, 0.0)");
-                        static_cast<GJBaseGameLayer*>(this)->queueButton(1, true, false, 0.0);
-                        break;
-                    }
-                    case 4: {
-                        // МЕТОД E: Все 4 старых метода + изменение Y velocity
-                        log::info("  TRYING: ALL old methods + yVelocity push");
-                        this->handleButton(true, 1, true);
-                        this->m_player1->pushButton(PlayerButton::Jump);
-                        static_cast<GJBaseGameLayer*>(this)->handleButton(true, 1, true);
-                        this->m_player1->m_yVelocity = 16.0;
-                        break;
-                    }
-                    case 5: {
-                        // МЕТОД F: handleButton + propellPlayer (комбо)
-                        log::info("  TRYING: handleButton + propellPlayer");
-                        this->handleButton(true, 1, true);
-                        this->m_player1->propellPlayer(16.0f, false, 0);
-                        break;
-                    }
-                }
+            // Каждые 30 кадров (0.5 сек) логируем подробности
+            if (g_tickCount % 30 == 0) {
+                float dx = px - g_bot.lastX;
+                float dy = py - g_bot.lastY;
+                log::info("tick #{} X={:.0f} Y={:.1f} dX={:.1f} dY={:.1f} dt={:.4f}",
+                          g_tickCount, px, py, dx, dy, dt);
+                g_bot.lastX = px;
+                g_bot.lastY = py;
             }
-
-            // ОТПУСТИТЬ - на 70-м кадре
-            if (g_bot.forcedJumpCounter == 70) {
-                int method = g_bot.jumpCycle % 6;
-                if (method == 0) {
-                    auto kd = cocos2d::CCDirector::sharedDirector()->getKeyboardDispatcher();
-                    if (kd) kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, false, false, 0.0);
-                }
-                this->handleButton(false, 1, true);
-                this->m_player1->releaseButton(PlayerButton::Jump);
-                static_cast<GJBaseGameLayer*>(this)->handleButton(false, 1, true);
-                static_cast<GJBaseGameLayer*>(this)->queueButton(1, false, false, 0.0);
-                log::info("  RELEASE all (after method {})", method);
-            }
-
-            // Через 90 кадров переключаемся на следующий метод
-            if (g_bot.forcedJumpCounter >= 90) {
-                g_bot.forcedJumpCounter = 0;
-                g_bot.jumpCycle++;
-                log::info("--- Switching to method {} ---", g_bot.jumpCycle % 6);
+        } else {
+            if (g_tickCount % 60 == 0) {
+                log::warn("tick #{}: m_player1 is NULL!", g_tickCount);
             }
         }
+
+        // НИКАКИХ ПРЫЖКОВ! Просто наблюдаем
     }
 
     void destroyPlayer(PlayerObject* p, GameObject* o) {
-        if (g_bot.active) g_bot.onDeath(this);
+        g_bot.onDeath(this);
         PlayLayer::destroyPlayer(p, o);
+    }
+
+    void resetLevel() {
+        log::info(">>> resetLevel() called <<<");
+        PlayLayer::resetLevel();
+        g_tickCount = 0;
     }
 };
 
 $on_mod(Loaded) {
     log::info("================================================");
-    log::info("=== chillbot v1.0.17-MEGAJUMP loaded ===");
-    log::info("=== 6 jump methods - watch playerY change ===");
+    log::info("=== chillbot v1.0.18-OBSERVE loaded ===");
+    log::info("=== PASSIVE MODE - watches without acting ===");
+    log::info("=== Press F5 to toggle observer ===");
     log::info("================================================");
 }
