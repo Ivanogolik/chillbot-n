@@ -121,7 +121,7 @@ class $modify(BotPlayLayer, PlayLayer) {
         if (g_bot.forcedJumpTest) {
             g_bot.forcedJumpCounter++;
 
-            // НАЖАТЬ — раз в секунду на 60-м кадре
+            // НАЖАТЬ - на 60-м кадре каждой секунды
             if (g_bot.forcedJumpCounter == 60) {
                 log::info("=== JUMP TEST at X={} Y={} ===",
                           (int)this->m_player1->getPositionX(),
@@ -135,7 +135,7 @@ class $modify(BotPlayLayer, PlayLayer) {
                 this->m_player1->pushButton(PlayerButton::Jump);
                 log::info("  M2: m_player1->pushButton(PlayerButton::Jump) called");
 
-                // МЕТОД 3: GJBaseGameLayer::handleButton (parent)
+                // МЕТОД 3: GJBaseGameLayer::handleButton (parent class)
                 static_cast<GJBaseGameLayer*>(this)->handleButton(true, 1, true);
                 log::info("  M3: GJBaseGameLayer::handleButton(true, 1, true) called");
 
@@ -144,7 +144,7 @@ class $modify(BotPlayLayer, PlayLayer) {
                 log::info("  M4: PlayLayer::handleButton(true, 0, true) called");
             }
 
-            // ОТПУСТИТЬ — на 70-м кадре (через 10 кадров после нажатия)
+            // ОТПУСТИТЬ - на 70-м кадре (через 10 кадров)
             if (g_bot.forcedJumpCounter == 70) {
                 this->handleButton(false, 1, true);
                 this->m_player1->releaseButton(PlayerButton::Jump);
