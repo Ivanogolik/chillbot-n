@@ -1,7 +1,6 @@
 // ============================================================
-// chillbot v1.0.12-FINAL by Ivanogolik
-// AI bot for Geometry Dash 2.2081 / Geode 5.6.1
-// Auto-start on level enter, F5 or B to toggle, key logger
+// chillbot v1.0.13-DIAG by Ivanogolik
+// DIAGNOSTIC: forced jump test + object scan logging
 // ============================================================
 
 #ifdef _WIN32
@@ -27,6 +26,7 @@
 #include <set>
 #include <filesystem>
 #include <cmath>
+#include <algorithm>
 
 #ifdef IN
 #undef IN
@@ -55,12 +55,49 @@ using namespace geode::prelude;
 struct BotState {
     bool active = false;
     bool autoStart = true;
+    bool forcedJumpTest = true;  // прыгать каждые 90 кадров для теста
     bool isHoldingJump = false;
     int jumpHoldFrames = 0;
+    int forcedJumpCounter = 0;
     std::set<int> deathPositions;
     int totalDeaths = 0;
-    float bestPercent = 0.0f;
     std::string currentLevelName = "";
+
+    // ДИАГНОСТИКА: сканируем и логируем что видим
+    void diagnosticScan(PlayLayer* pl) {
+        if (!pl || !pl->m_player1) return;
+        auto player = pl->m_player1;
+        float px = player->getPositionX();
+        float py = player->getPositionY();
+
+        if (!pl->m_objects) {
+            log::warn("DIAG: m_objects is NULL!");
+            return;
+        }
+        int count = pl->m_objects->count();
+        log::info("DIAG: player at X={:.0f} Y={:.0f}, total objects={}", px, py, count);
+
+        // Найдём ближайшие 5 объектов впереди
+        struct ObjInfo { float dx, dy; int id; };
+        std::vector<ObjInfo> nearby;
+        for (int i = 0; i < count; ++i) {
+            auto obj = static_cast<GameObject*>(pl->m_objects->objectAtIndex(i));
+            if (!obj) continue;
+            float ox = obj->getPositionX();
+            float oy = obj->getPositionY();
+            float dx = ox - px;
+            float dy = oy - py;
+            if (dx < -50.0f || dx > 500.0f) continue;
+            nearby.push_back({dx, dy, obj->m_objectID});
+        }
+        std::sort(nearby.begin(), nearby.end(),
+                  [](const ObjInfo& a, const ObjInfo& b){ return a.dx < b.dx; });
+        int show = (int)std::min((size_t)8, nearby.size());
+        for (int i = 0; i < show; ++i) {
+            log::info("DIAG: obj id={} dx={:.0f} dy={:.0f}",
+                      nearby[i].id, nearby[i].dx, nearby[i].dy);
+        }
+    }
 
     bool shouldJump(PlayLayer* pl) {
         if (!pl || !pl->m_player1) return false;
@@ -82,22 +119,25 @@ struct BotState {
                 float oy = obj->getPositionY();
                 float dx = ox - px;
                 float dy = std::abs(oy - py);
-                if (dx < 5.0f || dx > 180.0f) continue;
-                if (dy > 100.0f) continue;
+                if (dx < 5.0f || dx > 300.0f) continue;
+                if (dy > 150.0f) continue;
 
                 int id = obj->m_objectID;
+                // Spikes (расширенный список)
                 if (id == 8 || id == 9 || id == 39 || id == 103 ||
                     id == 216 || id == 217 || id == 218 || id == 219 ||
-                    id == 392 || id == 397 || id == 458 || id == 459) {
-                    if (dx < 90.0f) return true;
+                    id == 392 || id == 397 || id == 458 || id == 459 ||
+                    id == 446 || id == 447 || id == 448 || id == 449 ||
+                    id == 88 || id == 89 || id == 98 || id == 99 ||
+                    id == 100 || id == 177 || id == 178 || id == 179 ||
+                    id == 84 || id == 85 || id == 86 || id == 87) {
+                    if (dx < 130.0f) return true;
                 }
-                if (id == 40 || id == 41 || id == 42 || id == 43 ||
-                    id == 44 || id == 467 || id == 468) {
-                    if (dx < 60.0f) return true;
-                }
-                if (id == 36 || id == 84 || id == 141 || id == 1022 ||
-                    id == 1330 || id == 1333 || id == 1594 || id == 1751) {
-                    if (dx < 50.0f && dx > 10.0f) return true;
+                // Blocks
+                if (id == 1 || id == 2 || id == 3 || id == 4 || id == 5 ||
+                    id == 6 || id == 7 || id == 40 || id == 41 || id == 42 ||
+                    id == 43 || id == 44 || id == 467 || id == 468) {
+                    if (dx < 80.0f && dy < 50.0f) return true;
                 }
             }
         }
@@ -110,65 +150,17 @@ struct BotState {
         deathPositions.insert(px - 30);
         totalDeaths++;
         log::info("Death at X={}, total deaths={}", px, totalDeaths);
-        saveMacro();
     }
 
     void onLevelInit(PlayLayer* pl) {
         if (!pl || !pl->m_level) return;
         currentLevelName = pl->m_level->m_levelName;
         log::info("Level loaded: {}", currentLevelName);
-        loadMacro();
         if (autoStart) {
             active = true;
             log::info(">>> AUTO-ENABLED on level enter <<<");
         }
-    }
-
-    void onLevelComplete(PlayLayer* pl) {
-        if (!pl) return;
-        log::info("LEVEL COMPLETE!");
-        bestPercent = 100.0f;
-        saveMacro();
-    }
-
-    std::filesystem::path getMacroPath() {
-        auto dir = Mod::get()->getSaveDir();
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
-        return dir / "chillbot_macro.gdai";
-    }
-
-    void saveMacro() {
-        auto path = getMacroPath();
-        std::ofstream out(path);
-        if (!out.is_open()) return;
-        out << "GDAI1\n";
-        out << "LEVEL " << currentLevelName << "\n";
-        out << "BEST " << bestPercent << "\n";
-        out << "DEATHS " << totalDeaths << "\n";
-        for (int dx : deathPositions) out << "DEATH " << dx << "\n";
-        out.close();
-    }
-
-    void loadMacro() {
-        auto path = getMacroPath();
-        std::ifstream in(path);
-        if (!in.is_open()) {
-            log::info("No saved macro yet (first run on this level)");
-            return;
-        }
-        deathPositions.clear();
-        std::string line;
-        while (std::getline(in, line)) {
-            if (line.rfind("DEATH ", 0) == 0) {
-                deathPositions.insert(std::atoi(line.c_str() + 6));
-            } else if (line.rfind("BEST ", 0) == 0) {
-                bestPercent = (float)std::atof(line.c_str() + 5);
-            } else if (line.rfind("DEATHS ", 0) == 0) {
-                totalDeaths = std::atoi(line.c_str() + 7);
-            }
-        }
-        log::info("Macro loaded: {} deaths, best={}%", deathPositions.size(), bestPercent);
+        forcedJumpCounter = 0;
     }
 };
 
@@ -178,22 +170,18 @@ static int g_keyLogCount = 0;
 
 class $modify(MyKeyboardDispatcher, cocos2d::CCKeyboardDispatcher) {
     bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat, double delta) {
-        if (down && !repeat && g_keyLogCount < 50) {
+        if (down && !repeat && g_keyLogCount < 30) {
             log::info("KEY: code={} (0x{:X})", (int)key, (int)key);
             g_keyLogCount++;
         }
         if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
             g_bot.active = !g_bot.active;
-            log::info(">>> F5 pressed - Bot {} <<<", g_bot.active ? "ENABLED" : "DISABLED");
-            Notification::create(
-                g_bot.active ? "chillbot: ENABLED" : "chillbot: DISABLED",
-                g_bot.active ? NotificationIcon::Success : NotificationIcon::Info,
-                1.5f
-            )->show();
+            log::info(">>> F5 - Bot {} <<<", g_bot.active ? "ENABLED" : "DISABLED");
         }
         if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_B) {
-            g_bot.active = !g_bot.active;
-            log::info(">>> B pressed - Bot {} <<<", g_bot.active ? "ENABLED" : "DISABLED");
+            g_bot.forcedJumpTest = !g_bot.forcedJumpTest;
+            log::info(">>> B - Forced jump test {} <<<",
+                      g_bot.forcedJumpTest ? "ON" : "OFF");
         }
         return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
     }
@@ -215,11 +203,27 @@ class $modify(BotPlayLayer, PlayLayer) {
             log::info("tick #{} (active={}, deaths={})",
                       g_tickCount, g_bot.active ? 1 : 0, g_bot.totalDeaths);
         }
+        // Каждые 2 секунды печатаем что бот видит
+        if (g_tickCount % 120 == 0 && g_bot.active) {
+            g_bot.diagnosticScan(this);
+        }
 
         if (!g_bot.active) return;
         if (!this->m_player1) return;
 
         bool shouldJump = g_bot.shouldJump(this);
+
+        // ТЕСТ: принудительный прыжок каждые 90 кадров (≈1.5 сек)
+        // если в игре куб подпрыгнул — handleButton РАБОТАЕТ
+        if (g_bot.forcedJumpTest) {
+            g_bot.forcedJumpCounter++;
+            if (g_bot.forcedJumpCounter >= 90) {
+                g_bot.forcedJumpCounter = 0;
+                shouldJump = true;
+                log::info("FORCED JUMP TEST at X={}",
+                          (int)this->m_player1->getPositionX());
+            }
+        }
 
         if (shouldJump && !g_bot.isHoldingJump) {
             this->handleButton(true, 1, true);
@@ -241,17 +245,12 @@ class $modify(BotPlayLayer, PlayLayer) {
         if (g_bot.active) g_bot.onDeath(this);
         PlayLayer::destroyPlayer(p, o);
     }
-
-    void levelComplete() {
-        g_bot.onLevelComplete(this);
-        PlayLayer::levelComplete();
-    }
 };
 
 $on_mod(Loaded) {
     log::info("================================================");
-    log::info("=== chillbot v1.0.12-FINAL loaded ===");
-    log::info("=== AUTO-START enabled (no F5 needed) ===");
-    log::info("=== F5 or B key toggles bot manually ===");
+    log::info("=== chillbot v1.0.13-DIAG loaded ===");
+    log::info("=== AUTO-START + FORCED JUMP TEST ===");
+    log::info("=== F5: toggle bot, B: toggle forced jumps ===");
     log::info("================================================");
 }
