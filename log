@@ -1,0 +1,417 @@
+// ============================================================
+// chillbot v1.0.24-STABLE by Ivanogolik
+// Stable version with all fixes + GameMode support
+// Fixed u8string() crash, safer file ops
+// ============================================================
+
+#ifdef _WIN32
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+#endif
+
+#include <Geode/Geode.hpp>
+#include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/CCKeyboardDispatcher.hpp>
+#include <Geode/loader/Loader.hpp>
+#include <Geode/loader/Mod.hpp>
+#include <Geode/binding/PlayerObject.hpp>
+#include <Geode/binding/GJBaseGameLayer.hpp>
+#include <Geode/binding/GJGameLevel.hpp>
+#include <Geode/binding/GameObject.hpp>
+#include <fstream>
+#include <vector>
+#include <set>
+#include <map>
+#include <filesystem>
+#include <cmath>
+#include <algorithm>
+#include <string>
+
+#ifdef IN
+#undef IN
+#endif
+#ifdef OUT
+#undef OUT
+#endif
+#ifdef ERROR
+#undef ERROR
+#endif
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+
+using namespace geode::prelude;
+
+// ============================================================
+// Bot State
+// ============================================================
+struct BotState {
+    bool active = true;
+    bool blockPlayerInput = true;
+    bool debugScan = false;
+    int jumpCooldown = 0;
+    int realDeaths = 0;
+    float lastX = 0.0f;
+    float maxX = 0.0f;
+    float bestPercent = 0.0f;
+    int jumpsExecuted = 0;
+    std::string currentLevelName = "";
+    std::set<int> deathPositions;
+
+    bool isOnGround(PlayerObject* p) {
+        if (!p) return false;
+        return std::abs(p->m_yVelocity) < 0.5f;
+    }
+
+    bool shouldJump(GJBaseGameLayer* gl) {
+        if (!gl || !gl->m_player1) return false;
+        auto player = gl->m_player1;
+
+        // Прыгаем только когда на земле (для cube mode)
+        if (!isOnGround(player)) return false;
+
+        float px = player->getPositionX();
+        float py = player->getPositionY();
+
+        // Запомненные смерти - прыгать заранее
+        for (int dx : deathPositions) {
+            float dist = (float)dx - px;
+            if (dist > 5 && dist < 50) return true;
+        }
+
+        if (!gl->m_objects) return false;
+        int count = gl->m_objects->count();
+
+        for (int i = 0; i < count; ++i) {
+            auto obj = static_cast<GameObject*>(gl->m_objects->objectAtIndex(i));
+            if (!obj) continue;
+            float ox = obj->getPositionX();
+            float oy = obj->getPositionY();
+            float dx = ox - px;
+            float dy = std::abs(oy - py);
+
+            if (dx < 10.0f || dx > 100.0f) continue;
+            if (dy > 80.0f) continue;
+
+            int id = obj->m_objectID;
+
+            // Шипы
+            if (id == 8 || id == 9 || id == 39 || id == 103 ||
+                id == 216 || id == 217 || id == 218 || id == 219 ||
+                id == 392 || id == 397 || id == 458 || id == 459 ||
+                id == 446 || id == 447 || id == 88 || id == 89 ||
+                id == 98 || id == 99 || id == 100 || id == 177 ||
+                id == 178 || id == 179) {
+                if (dx >= 30.0f && dx <= 70.0f) return true;
+            }
+            // Блоки
+            if (id == 1 || id == 2 || id == 3 || id == 4 || id == 5 ||
+                id == 6 || id == 7 || id == 40 || id == 41 || id == 42 ||
+                id == 43 || id == 44 || id == 467 || id == 468) {
+                if (dx >= 25.0f && dx <= 55.0f && dy < 50.0f) return true;
+            }
+            // Орбы (jump rings) - активируем при близости
+            if (id == 36 || id == 84 || id == 141 || id == 1022 ||
+                id == 1330 || id == 1333 || id == 1594 || id == 1751) {
+                if (dx >= 15.0f && dx <= 45.0f) return true;
+            }
+        }
+        return false;
+    }
+
+    void scanAndLogObjects(GJBaseGameLayer* gl) {
+        if (!gl || !gl->m_player1 || !gl->m_objects) return;
+        float px = gl->m_player1->getPositionX();
+        float py = gl->m_player1->getPositionY();
+        int count = gl->m_objects->count();
+
+        log::info("=== SCAN: player at X={:.0f} Y={:.0f}, total={} ===",
+                  px, py, count);
+
+        struct Info { float dx, dy; int id; };
+        std::vector<Info> nearby;
+        for (int i = 0; i < count; ++i) {
+            auto obj = static_cast<GameObject*>(gl->m_objects->objectAtIndex(i));
+            if (!obj) continue;
+            float dx = obj->getPositionX() - px;
+            float dy = obj->getPositionY() - py;
+            if (dx < -20.0f || dx > 250.0f) continue;
+            if (std::abs(dy) > 150.0f) continue;
+            nearby.push_back({dx, dy, obj->m_objectID});
+        }
+        std::sort(nearby.begin(), nearby.end(),
+                  [](const Info& a, const Info& b){ return a.dx < b.dx; });
+        int show = (int)std::min((size_t)15, nearby.size());
+        for (int i = 0; i < show; ++i) {
+            log::info("  obj id={} dx={:.0f} dy={:.0f}",
+                      nearby[i].id, nearby[i].dx, nearby[i].dy);
+        }
+    }
+
+    void executeJump(PlayLayer* pl) {
+        if (!pl || !pl->m_player1) return;
+        // Все 3 надёжных метода одновременно
+        pl->handleButton(true, 1, true);
+        pl->m_player1->pushButton(PlayerButton::Jump);
+        pl->m_player1->m_yVelocity = 16.0;  // прямая физика - гарантированно работает
+        jumpsExecuted++;
+    }
+
+    void releaseJump(PlayLayer* pl) {
+        if (!pl) return;
+        pl->handleButton(false, 1, true);
+        if (pl->m_player1) pl->m_player1->releaseButton(PlayerButton::Jump);
+    }
+
+    void onLevelInit(PlayLayer* pl) {
+        if (!pl || !pl->m_level) return;
+        currentLevelName = pl->m_level->m_levelName;
+        log::info("Level loaded: {}", currentLevelName);
+        log::info(">>> Bot {} | Player input {} <<<",
+                  active ? "ON" : "OFF",
+                  blockPlayerInput ? "BLOCKED" : "ALLOWED");
+        loadMacro();
+        maxX = 0;
+        lastX = 0;
+        jumpCooldown = 0;
+        jumpsExecuted = 0;
+    }
+
+    // ============================================================
+    // Save/Load — SAFE version (no u8string, no crashes)
+    // ============================================================
+    std::filesystem::path getMacroPath() {
+        auto dir = Mod::get()->getSaveDir();
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        return dir / "chillbot_macro.gdai";
+    }
+
+    std::string pathToSafeString(const std::filesystem::path& p) {
+        // Безопасное преобразование пути в строку для лога
+        // НЕ используем .u8string() — он возвращает std::u8string и ломает fmt
+        std::error_code ec;
+        auto canon = std::filesystem::weakly_canonical(p, ec);
+        if (ec) {
+            return p.string();
+        }
+        return canon.string();
+    }
+
+    void saveMacro() {
+        auto path = getMacroPath();
+        std::ofstream out(path);
+        if (!out.is_open()) {
+            log::warn("[chillbot] Failed to open macro file for writing");
+            return;
+        }
+        out << "GDAI1\n";
+        out << "LEVEL " << currentLevelName << "\n";
+        out << "BEST " << bestPercent << "\n";
+        out << "DEATHS " << realDeaths << "\n";
+        for (int dx : deathPositions) {
+            out << "DEATH " << dx << "\n";
+        }
+        out.close();
+        log::info("Macro saved ({} death positions)", deathPositions.size());
+    }
+
+    void loadMacro() {
+        auto path = getMacroPath();
+        std::ifstream in(path);
+        if (!in.is_open()) {
+            log::info("No saved macro yet (first run on this level)");
+            return;
+        }
+        deathPositions.clear();
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.rfind("DEATH ", 0) == 0) {
+                deathPositions.insert(std::atoi(line.c_str() + 6));
+            } else if (line.rfind("BEST ", 0) == 0) {
+                bestPercent = (float)std::atof(line.c_str() + 5);
+            } else if (line.rfind("DEATHS ", 0) == 0) {
+                realDeaths = std::atoi(line.c_str() + 7);
+            }
+        }
+        log::info("Macro loaded: {} deaths, best={}%",
+                  deathPositions.size(), bestPercent);
+    }
+};
+
+static BotState g_bot;
+static int g_tickCount = 0;
+static bool g_simulatingKey = false;
+
+// ============================================================
+// Keyboard hook: F5/L/K + block player input
+// ============================================================
+class $modify(MyKeyboardDispatcher, cocos2d::CCKeyboardDispatcher) {
+    bool dispatchKeyboardMSG(cocos2d::enumKeyCodes key, bool down, bool repeat, double delta) {
+        // F5 — toggle бота
+        if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_F5) {
+            g_bot.active = !g_bot.active;
+            log::info(">>> F5 - Bot {} <<<", g_bot.active ? "ON" : "OFF");
+            Notification::create(
+                g_bot.active ? "chillbot: ON" : "chillbot: OFF",
+                g_bot.active ? NotificationIcon::Success : NotificationIcon::Info,
+                1.0f
+            )->show();
+            return true;
+        }
+        // L — блокировка ввода игрока
+        if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_L) {
+            g_bot.blockPlayerInput = !g_bot.blockPlayerInput;
+            log::info(">>> L - Player input {} <<<",
+                      g_bot.blockPlayerInput ? "BLOCKED" : "ALLOWED");
+            Notification::create(
+                g_bot.blockPlayerInput ? "Input: BLOCKED" : "Input: ALLOWED",
+                NotificationIcon::Info, 1.0f
+            )->show();
+            return true;
+        }
+        // K — debug scan toggle
+        if (down && !repeat && key == cocos2d::enumKeyCodes::KEY_K) {
+            g_bot.debugScan = !g_bot.debugScan;
+            log::info(">>> K - Debug scan {} <<<",
+                      g_bot.debugScan ? "ON" : "OFF");
+            return true;
+        }
+
+        // Блокировка прыжка игрока когда бот активен
+        if (g_bot.active && g_bot.blockPlayerInput && !g_simulatingKey) {
+            if (key == cocos2d::enumKeyCodes::KEY_Space ||
+                key == cocos2d::enumKeyCodes::KEY_Up ||
+                key == cocos2d::enumKeyCodes::KEY_W) {
+                return true;  // не передаём в игру
+            }
+        }
+
+        return cocos2d::CCKeyboardDispatcher::dispatchKeyboardMSG(key, down, repeat, delta);
+    }
+};
+
+// ============================================================
+// PlayLayer hooks
+// ============================================================
+class $modify(BotPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+        g_bot.onLevelInit(this);
+        g_tickCount = 0;
+        return true;
+    }
+
+    void update(float dt) {
+        PlayLayer::update(dt);
+        g_tickCount++;
+
+        if (!g_bot.active) return;
+        if (!this->m_player1) return;
+
+        float px = this->m_player1->getPositionX();
+        float py = this->m_player1->getPositionY();
+        float vy = this->m_player1->m_yVelocity;
+
+        // Детект смерти через сброс X
+        if (px < g_bot.lastX - 100.0f && g_bot.lastX > 200.0f) {
+            int deathX = (int)g_bot.lastX;
+            g_bot.deathPositions.insert(deathX - 30);
+            g_bot.realDeaths++;
+            log::info("REAL DEATH at X={} (death #{}, learned!)",
+                      deathX, g_bot.realDeaths);
+            // Сохраняем после каждой смерти - не потеряем прогресс
+            g_bot.saveMacro();
+        }
+        g_bot.lastX = px;
+        if (px > g_bot.maxX) g_bot.maxX = px;
+
+        if (g_tickCount % 60 == 0) {
+            log::info("tick #{} X={:.0f} Y={:.1f} vY={:.2f} maxX={:.0f} jumps={} deaths={} ground={}",
+                      g_tickCount, px, py, vy, g_bot.maxX,
+                      g_bot.jumpsExecuted, g_bot.realDeaths,
+                      g_bot.isOnGround(this->m_player1) ? 1 : 0);
+        }
+
+        if (g_bot.debugScan && g_tickCount % 30 == 0) {
+            g_bot.scanAndLogObjects(this);
+        }
+
+        if (g_bot.jumpCooldown > 0) {
+            g_bot.jumpCooldown--;
+        }
+
+        bool needJump = g_bot.shouldJump(this);
+        if (needJump && g_bot.jumpCooldown == 0) {
+            g_simulatingKey = true;
+            g_bot.executeJump(this);
+            g_simulatingKey = false;
+
+            log::info("JUMP! X={:.0f} Y={:.1f} vY before={:.2f} after={:.2f} (#{})",
+                      px, py, vy, this->m_player1->m_yVelocity,
+                      g_bot.jumpsExecuted);
+            g_bot.jumpCooldown = 20;
+        }
+
+        // Отпускаем кнопку через 5 кадров после прыжка
+        if (g_bot.jumpCooldown == 15) {
+            g_simulatingKey = true;
+            g_bot.releaseJump(this);
+            g_simulatingKey = false;
+        }
+    }
+
+    void resetLevel() {
+        log::info(">>> RESET maxX={:.0f} jumps={} deaths={} <<<",
+                  g_bot.maxX, g_bot.jumpsExecuted, g_bot.realDeaths);
+        g_bot.maxX = 0;
+        g_bot.lastX = 0;
+        g_bot.jumpCooldown = 0;
+        g_bot.jumpsExecuted = 0;
+        g_tickCount = 0;
+        PlayLayer::resetLevel();
+    }
+
+    void levelComplete() {
+        log::info(">>> LEVEL COMPLETE! Final maxX={:.0f} <<<", g_bot.maxX);
+        g_bot.bestPercent = 100.0f;
+        g_bot.saveMacro();
+        PlayLayer::levelComplete();
+    }
+};
+
+// ============================================================
+// Mod entry point
+// ============================================================
+$on_mod(Loaded) {
+    log::info("================================================");
+    log::info("=== chillbot v1.0.24-STABLE loaded ===");
+    log::info("=== Stable: u8string fix, safer file ops ===");
+    log::info("=== F5: bot | L: input lock | K: debug scan ===");
+    log::info("=== AUTO-ON, player input BLOCKED by default ===");
+    log::info("================================================");
+
+    auto loader = Loader::get();
+    if (loader->isModLoaded("hjfod.betteredit")) {
+        log::info("[chillbot] BetterEdit detected");
+    }
+    if (loader->isModLoaded("geode.custom-keybinds")) {
+        log::info("[chillbot] Custom Keybinds detected");
+    }
+    if (loader->isModLoaded("geode.devtools")) {
+        log::info("[chillbot] DevTools detected");
+    }
+}
