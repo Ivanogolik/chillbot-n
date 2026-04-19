@@ -1,6 +1,6 @@
 // ============================================================
-// chillbot v1.0.16-MEGAJUMP by Ivanogolik
-// Try EVERY known jump method simultaneously
+// chillbot v1.0.17-MEGAJUMP by Ivanogolik
+// Fixed signatures for propellPlayer and queueButton
 // ============================================================
 
 #ifdef _WIN32
@@ -52,7 +52,7 @@ struct BotState {
     bool forcedJumpTest = true;
     int forcedJumpCounter = 0;
     int totalDeaths = 0;
-    int jumpCycle = 0;  // какой метод сейчас тестируем 0..4
+    int jumpCycle = 0;
     std::string currentLevelName = "";
 
     void onLevelInit(PlayLayer* pl) {
@@ -124,7 +124,7 @@ class $modify(BotPlayLayer, PlayLayer) {
         if (g_bot.forcedJumpTest) {
             g_bot.forcedJumpCounter++;
 
-            // Каждые 90 кадров (1.5 сек) пробуем СЛЕДУЮЩИЙ метод
+            // НАЖАТЬ - на 60-м кадре каждой секунды
             if (g_bot.forcedJumpCounter == 60) {
                 int method = g_bot.jumpCycle % 6;
                 log::info("=== TEST METHOD {} at X={} Y={} ===",
@@ -134,8 +134,8 @@ class $modify(BotPlayLayer, PlayLayer) {
 
                 switch (method) {
                     case 0: {
-                        // МЕТОД A: Симуляция нажатия клавиши Space
-                        log::info("  TRYING: dispatchKeyboardMSG(KEY_Space, true, false, 0.0)");
+                        // МЕТОД A: Симуляция нажатия Space через CCKeyboardDispatcher
+                        log::info("  TRYING: dispatchKeyboardMSG(KEY_Space, true)");
                         auto kd = cocos2d::CCDirector::sharedDirector()->getKeyboardDispatcher();
                         if (kd) {
                             kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, true, false, 0.0);
@@ -143,21 +143,21 @@ class $modify(BotPlayLayer, PlayLayer) {
                         break;
                     }
                     case 1: {
-                        // МЕТОД B: Прямое изменение m_yVelocity (прыжок через физику)
+                        // МЕТОД B: Прямое изменение m_yVelocity
                         log::info("  TRYING: m_player1->m_yVelocity = 16.0");
                         this->m_player1->m_yVelocity = 16.0;
                         break;
                     }
                     case 2: {
-                        // МЕТОД C: propellPlayer (специальная функция прыжка)
-                        log::info("  TRYING: m_player1->propellPlayer(1.0f)");
-                        this->m_player1->propellPlayer(1.0f);
+                        // МЕТОД C: propellPlayer (ПРАВИЛЬНАЯ сигнатура: yVelocity, noEffects, objectType)
+                        log::info("  TRYING: m_player1->propellPlayer(16.0f, false, 0)");
+                        this->m_player1->propellPlayer(16.0f, false, 0);
                         break;
                     }
                     case 3: {
-                        // МЕТОД D: queueButton через GJBaseGameLayer
-                        log::info("  TRYING: queueButton(1, true, true)");
-                        static_cast<GJBaseGameLayer*>(this)->queueButton(1, true, true);
+                        // МЕТОД D: queueButton (ПРАВИЛЬНАЯ сигнатура: button, push, isPlayer2, timestamp)
+                        log::info("  TRYING: queueButton(1, true, false, 0.0)");
+                        static_cast<GJBaseGameLayer*>(this)->queueButton(1, true, false, 0.0);
                         break;
                     }
                     case 4: {
@@ -170,17 +170,16 @@ class $modify(BotPlayLayer, PlayLayer) {
                         break;
                     }
                     case 5: {
-                        // МЕТОД F: Тригер through ButtonAction (кадр-точная симуляция)
-                        log::info("  TRYING: handleButton both buttons + propell");
+                        // МЕТОД F: handleButton + propellPlayer (комбо)
+                        log::info("  TRYING: handleButton + propellPlayer");
                         this->handleButton(true, 1, true);
-                        this->handleButton(true, 2, true);
-                        this->m_player1->propellPlayer(1.0f);
+                        this->m_player1->propellPlayer(16.0f, false, 0);
                         break;
                     }
                 }
             }
 
-            // Отпускаем на 70-м кадре
+            // ОТПУСТИТЬ - на 70-м кадре
             if (g_bot.forcedJumpCounter == 70) {
                 int method = g_bot.jumpCycle % 6;
                 if (method == 0) {
@@ -188,14 +187,13 @@ class $modify(BotPlayLayer, PlayLayer) {
                     if (kd) kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, false, false, 0.0);
                 }
                 this->handleButton(false, 1, true);
-                this->handleButton(false, 2, true);
                 this->m_player1->releaseButton(PlayerButton::Jump);
                 static_cast<GJBaseGameLayer*>(this)->handleButton(false, 1, true);
-                static_cast<GJBaseGameLayer*>(this)->queueButton(1, false, true);
+                static_cast<GJBaseGameLayer*>(this)->queueButton(1, false, false, 0.0);
                 log::info("  RELEASE all (after method {})", method);
             }
 
-            // Через 90 кадров (1.5 сек) переключаемся на следующий метод
+            // Через 90 кадров переключаемся на следующий метод
             if (g_bot.forcedJumpCounter >= 90) {
                 g_bot.forcedJumpCounter = 0;
                 g_bot.jumpCycle++;
@@ -212,8 +210,7 @@ class $modify(BotPlayLayer, PlayLayer) {
 
 $on_mod(Loaded) {
     log::info("================================================");
-    log::info("=== chillbot v1.0.16-MEGAJUMP loaded ===");
-    log::info("=== Tries 6 different jump methods cycling ===");
-    log::info("=== Watch playerY in tick logs ===");
+    log::info("=== chillbot v1.0.17-MEGAJUMP loaded ===");
+    log::info("=== 6 jump methods - watch playerY change ===");
     log::info("================================================");
 }
