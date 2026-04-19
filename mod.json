@@ -6,32 +6,24 @@
         "mac": "2.2081",
         "ios": "2.2081"
     },
-    "version": "v1.0.22",
+    "version": "v1.0.24",
     "id": "ivanogolik.chillbot",
     "name": "chillbot",
     "developers": ["Ivanogolik"],
-    "description": "AI bot that learns to play levels and saves macros (zBot/Eclipse-like).",
+    "description": "AI bot that learns to play levels by remembering death positions.",
     "tags": ["gameplay", "utility"],
-    "dependencies": {
-        "geode.custom-keybinds": {
-            "version": ">=2.0.0"
-        },
-        "geode.devtools": {
-            "version": ">=1.0.0"
-        }
-    },
     "settings": {
-        "recording-enabled": {
+        "bot-enabled": {
             "type": "bool",
             "default": true,
-            "name": "Record successful runs",
-            "description": "Save best progress to chillbot_macro.gdai"
+            "name": "Bot enabled on start",
+            "description": "Automatically activate bot when entering a level"
         },
-        "playback-mode": {
+        "block-player-input": {
             "type": "bool",
-            "default": false,
-            "name": "Playback best macro",
-            "description": "Replay saved best run instead of learning"
+            "default": true,
+            "name": "Block player input when bot is active",
+            "description": "Prevent player from interfering with the bot"
         }
     }
 }
