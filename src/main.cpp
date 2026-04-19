@@ -1,6 +1,6 @@
 // ============================================================
-// chillbot v1.0.15-MULTIJUMP by Ivanogolik
-// Try multiple jump methods - one MUST work in 2.2081
+// chillbot v1.0.16-MEGAJUMP by Ivanogolik
+// Try EVERY known jump method simultaneously
 // ============================================================
 
 #ifdef _WIN32
@@ -52,6 +52,7 @@ struct BotState {
     bool forcedJumpTest = true;
     int forcedJumpCounter = 0;
     int totalDeaths = 0;
+    int jumpCycle = 0;  // какой метод сейчас тестируем 0..4
     std::string currentLevelName = "";
 
     void onLevelInit(PlayLayer* pl) {
@@ -63,6 +64,7 @@ struct BotState {
             log::info(">>> AUTO-ENABLED on level enter <<<");
         }
         forcedJumpCounter = 0;
+        jumpCycle = 0;
     }
 
     void onDeath(PlayLayer* pl) {
@@ -110,9 +112,10 @@ class $modify(BotPlayLayer, PlayLayer) {
         g_tickCount++;
         if (g_tickCount % 60 == 0) {
             float py = this->m_player1 ? this->m_player1->getPositionY() : -1;
-            log::info("tick #{} (active={}, deaths={}, playerY={:.1f})",
+            float px = this->m_player1 ? this->m_player1->getPositionX() : -1;
+            log::info("tick #{} (active={}, deaths={}, X={:.0f}, Y={:.1f})",
                       g_tickCount, g_bot.active ? 1 : 0,
-                      g_bot.totalDeaths, py);
+                      g_bot.totalDeaths, px, py);
         }
 
         if (!g_bot.active) return;
@@ -121,41 +124,82 @@ class $modify(BotPlayLayer, PlayLayer) {
         if (g_bot.forcedJumpTest) {
             g_bot.forcedJumpCounter++;
 
-            // НАЖАТЬ - на 60-м кадре каждой секунды
+            // Каждые 90 кадров (1.5 сек) пробуем СЛЕДУЮЩИЙ метод
             if (g_bot.forcedJumpCounter == 60) {
-                log::info("=== JUMP TEST at X={} Y={} ===",
+                int method = g_bot.jumpCycle % 6;
+                log::info("=== TEST METHOD {} at X={} Y={} ===",
+                          method,
                           (int)this->m_player1->getPositionX(),
                           (int)this->m_player1->getPositionY());
 
-                // МЕТОД 1: handleButton от PlayLayer
-                this->handleButton(true, 1, true);
-                log::info("  M1: PlayLayer::handleButton(true, 1, true) called");
-
-                // МЕТОД 2: pushButton на player с PlayerButton::Jump
-                this->m_player1->pushButton(PlayerButton::Jump);
-                log::info("  M2: m_player1->pushButton(PlayerButton::Jump) called");
-
-                // МЕТОД 3: GJBaseGameLayer::handleButton (parent class)
-                static_cast<GJBaseGameLayer*>(this)->handleButton(true, 1, true);
-                log::info("  M3: GJBaseGameLayer::handleButton(true, 1, true) called");
-
-                // МЕТОД 4: handleButton с button=0 (вместо 1)
-                this->handleButton(true, 0, true);
-                log::info("  M4: PlayLayer::handleButton(true, 0, true) called");
+                switch (method) {
+                    case 0: {
+                        // МЕТОД A: Симуляция нажатия клавиши Space
+                        log::info("  TRYING: dispatchKeyboardMSG(KEY_Space, true, false, 0.0)");
+                        auto kd = cocos2d::CCDirector::sharedDirector()->getKeyboardDispatcher();
+                        if (kd) {
+                            kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, true, false, 0.0);
+                        }
+                        break;
+                    }
+                    case 1: {
+                        // МЕТОД B: Прямое изменение m_yVelocity (прыжок через физику)
+                        log::info("  TRYING: m_player1->m_yVelocity = 16.0");
+                        this->m_player1->m_yVelocity = 16.0;
+                        break;
+                    }
+                    case 2: {
+                        // МЕТОД C: propellPlayer (специальная функция прыжка)
+                        log::info("  TRYING: m_player1->propellPlayer(1.0f)");
+                        this->m_player1->propellPlayer(1.0f);
+                        break;
+                    }
+                    case 3: {
+                        // МЕТОД D: queueButton через GJBaseGameLayer
+                        log::info("  TRYING: queueButton(1, true, true)");
+                        static_cast<GJBaseGameLayer*>(this)->queueButton(1, true, true);
+                        break;
+                    }
+                    case 4: {
+                        // МЕТОД E: Все 4 старых метода + изменение Y velocity
+                        log::info("  TRYING: ALL old methods + yVelocity push");
+                        this->handleButton(true, 1, true);
+                        this->m_player1->pushButton(PlayerButton::Jump);
+                        static_cast<GJBaseGameLayer*>(this)->handleButton(true, 1, true);
+                        this->m_player1->m_yVelocity = 16.0;
+                        break;
+                    }
+                    case 5: {
+                        // МЕТОД F: Тригер through ButtonAction (кадр-точная симуляция)
+                        log::info("  TRYING: handleButton both buttons + propell");
+                        this->handleButton(true, 1, true);
+                        this->handleButton(true, 2, true);
+                        this->m_player1->propellPlayer(1.0f);
+                        break;
+                    }
+                }
             }
 
-            // ОТПУСТИТЬ - на 70-м кадре (через 10 кадров)
+            // Отпускаем на 70-м кадре
             if (g_bot.forcedJumpCounter == 70) {
+                int method = g_bot.jumpCycle % 6;
+                if (method == 0) {
+                    auto kd = cocos2d::CCDirector::sharedDirector()->getKeyboardDispatcher();
+                    if (kd) kd->dispatchKeyboardMSG(cocos2d::enumKeyCodes::KEY_Space, false, false, 0.0);
+                }
                 this->handleButton(false, 1, true);
+                this->handleButton(false, 2, true);
                 this->m_player1->releaseButton(PlayerButton::Jump);
                 static_cast<GJBaseGameLayer*>(this)->handleButton(false, 1, true);
-                this->handleButton(false, 0, true);
-                log::info("  RELEASE all methods");
+                static_cast<GJBaseGameLayer*>(this)->queueButton(1, false, true);
+                log::info("  RELEASE all (after method {})", method);
             }
 
-            // СБРОС счётчика каждые 2 секунды
-            if (g_bot.forcedJumpCounter >= 120) {
+            // Через 90 кадров (1.5 сек) переключаемся на следующий метод
+            if (g_bot.forcedJumpCounter >= 90) {
                 g_bot.forcedJumpCounter = 0;
+                g_bot.jumpCycle++;
+                log::info("--- Switching to method {} ---", g_bot.jumpCycle % 6);
             }
         }
     }
@@ -168,7 +212,8 @@ class $modify(BotPlayLayer, PlayLayer) {
 
 $on_mod(Loaded) {
     log::info("================================================");
-    log::info("=== chillbot v1.0.15-MULTIJUMP loaded ===");
-    log::info("=== Tries 4 jump methods each second ===");
+    log::info("=== chillbot v1.0.16-MEGAJUMP loaded ===");
+    log::info("=== Tries 6 different jump methods cycling ===");
+    log::info("=== Watch playerY in tick logs ===");
     log::info("================================================");
 }
