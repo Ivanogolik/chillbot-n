@@ -1,6 +1,6 @@
 // ============================================================
-// chillbot v1.0.14-MULTIJUMP by Ivanogolik
-// Try 5 different jump methods - one MUST work in 2.2081
+// chillbot v1.0.15-MULTIJUMP by Ivanogolik
+// Try multiple jump methods - one MUST work in 2.2081
 // ============================================================
 
 #ifdef _WIN32
@@ -109,56 +109,51 @@ class $modify(BotPlayLayer, PlayLayer) {
 
         g_tickCount++;
         if (g_tickCount % 60 == 0) {
-            log::info("tick #{} (active={}, deaths={}, holding={})",
+            float py = this->m_player1 ? this->m_player1->getPositionY() : -1;
+            log::info("tick #{} (active={}, deaths={}, playerY={:.1f})",
                       g_tickCount, g_bot.active ? 1 : 0,
-                      g_bot.totalDeaths,
-                      this->m_player1 ? (int)this->m_player1->m_isHolding : -1);
+                      g_bot.totalDeaths, py);
         }
 
         if (!g_bot.active) return;
         if (!this->m_player1) return;
 
-        // Принудительный прыжок каждые 60 кадров (1 сек)
         if (g_bot.forcedJumpTest) {
             g_bot.forcedJumpCounter++;
 
-            // НАЖАТЬ — на 60-м тике каждой секунды
+            // НАЖАТЬ — раз в секунду на 60-м кадре
             if (g_bot.forcedJumpCounter == 60) {
-                log::info("=== JUMP TEST at X={} ===",
-                          (int)this->m_player1->getPositionX());
+                log::info("=== JUMP TEST at X={} Y={} ===",
+                          (int)this->m_player1->getPositionX(),
+                          (int)this->m_player1->getPositionY());
 
                 // МЕТОД 1: handleButton от PlayLayer
                 this->handleButton(true, 1, true);
                 log::info("  M1: PlayLayer::handleButton(true, 1, true) called");
 
-                // МЕТОД 2: pushButton на player
+                // МЕТОД 2: pushButton на player с PlayerButton::Jump
                 this->m_player1->pushButton(PlayerButton::Jump);
                 log::info("  M2: m_player1->pushButton(PlayerButton::Jump) called");
 
-                // МЕТОД 3: установить m_isHolding напрямую
-                this->m_player1->m_isHolding = true;
-                log::info("  M3: m_player1->m_isHolding = true");
-
-                // МЕТОД 4: m_isHolding на самом PlayLayer
-                this->m_isHolding = true;
-                log::info("  M4: PlayLayer m_isHolding = true");
-
-                // МЕТОД 5: GJBaseGameLayer::handleButton (parent class)
+                // МЕТОД 3: GJBaseGameLayer::handleButton (parent)
                 static_cast<GJBaseGameLayer*>(this)->handleButton(true, 1, true);
-                log::info("  M5: GJBaseGameLayer::handleButton(true, 1, true) called");
+                log::info("  M3: GJBaseGameLayer::handleButton(true, 1, true) called");
+
+                // МЕТОД 4: handleButton с button=0 (вместо 1)
+                this->handleButton(true, 0, true);
+                log::info("  M4: PlayLayer::handleButton(true, 0, true) called");
             }
 
-            // ОТПУСТИТЬ — на 70-м тике (через 10 кадров после нажатия)
+            // ОТПУСТИТЬ — на 70-м кадре (через 10 кадров после нажатия)
             if (g_bot.forcedJumpCounter == 70) {
                 this->handleButton(false, 1, true);
                 this->m_player1->releaseButton(PlayerButton::Jump);
-                this->m_player1->m_isHolding = false;
-                this->m_isHolding = false;
                 static_cast<GJBaseGameLayer*>(this)->handleButton(false, 1, true);
+                this->handleButton(false, 0, true);
                 log::info("  RELEASE all methods");
             }
 
-            // СБРОС счётчика
+            // СБРОС счётчика каждые 2 секунды
             if (g_bot.forcedJumpCounter >= 120) {
                 g_bot.forcedJumpCounter = 0;
             }
@@ -173,7 +168,7 @@ class $modify(BotPlayLayer, PlayLayer) {
 
 $on_mod(Loaded) {
     log::info("================================================");
-    log::info("=== chillbot v1.0.14-MULTIJUMP loaded ===");
-    log::info("=== Tries 5 methods of jumping each second ===");
+    log::info("=== chillbot v1.0.15-MULTIJUMP loaded ===");
+    log::info("=== Tries 4 jump methods each second ===");
     log::info("================================================");
 }
